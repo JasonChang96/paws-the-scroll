@@ -5,7 +5,6 @@ import mangoPng from "../../assets/mango.png";
 import plutoPng from "../../assets/pluto.png";
 import { ErrorModal } from "../components/ErrorModal";
 import { readPortraitBytes, saveCat, seedInitialPortrait } from "../lib/api";
-import { stripBackground } from "../lib/backgroundRemoval";
 import type { Cat, CatType } from "../lib/types";
 import { newId } from "../lib/util";
 import { useViewStore } from "../lib/viewStore";
@@ -74,10 +73,9 @@ export function CatAdoption() {
 			// starting state; first edit-API regeneration only happens
 			// later when mood/tier/skills change.
 			const portrait = await seedInitialPortrait(catId, choice.type);
-			const rawDataUrl = await readPortraitBytes(portrait.path);
-			// Strip the base PNG's background so the reveal cat sits on
-			// transparent. Falls back to the opaque source on any failure.
-			const dataUrl = await stripBackground(rawDataUrl);
+			// Base PNGs already ship with transparent backgrounds, so we
+			// skip stripBackground entirely on adoption — instant reveal.
+			const dataUrl = await readPortraitBytes(portrait.path);
 			const cat: Cat = {
 				id: catId,
 				type: choice.type,
@@ -98,6 +96,7 @@ export function CatAdoption() {
 				items: [],
 				story_events: [],
 				portrait_path: portrait.path,
+				portrait_is_base: true,
 			};
 			await saveCat(cat);
 			setRevealed({ choice, dataUrl, cat });

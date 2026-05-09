@@ -115,6 +115,7 @@ async fn force_evolve_cat<R: Runtime>(app: &AppHandle<R>) {
     match crate::openai::generate_portrait(app, &request).await {
         Ok(response) => {
             cat.portrait_path = Some(response.path);
+            cat.portrait_is_base = false;
             if let Err(error) = crate::store::write_cat(app, &cat) {
                 log::warn!("[demo-trigger] evolve: portrait_path write failed: {error}");
             }

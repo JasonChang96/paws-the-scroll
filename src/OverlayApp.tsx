@@ -3,6 +3,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import clsx from "clsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { match } from "ts-pattern";
+import beanPng from "../assets/bean.png";
+import mangoPng from "../assets/mango.png";
+import plutoPng from "../assets/pluto.png";
 import {
 	applyTaskOutcome,
 	generateInterruptionTask,
@@ -22,6 +25,20 @@ import {
 } from "./lib/overlayApi";
 import type { Cat, GeneratedTaskBundle, UserProfile } from "./lib/types";
 import { newId, nowIso } from "./lib/util";
+
+/// Static base PNG fallback shown only when nothing has been bg-removed yet
+/// (cold start, or first cat after adoption). After the first successful
+/// strip we never reveal an un-stripped portrait again.
+function baseImageFor(catType: Cat["type"]): string {
+	switch (catType) {
+		case "orange_fat":
+			return mangoPng;
+		case "void":
+			return plutoPng;
+		case "scrungly_street":
+			return beanPng;
+	}
+}
 
 type Mode =
 	| { kind: "companion" }
@@ -62,22 +79,39 @@ function OverlayApp() {
 		return () => clearInterval(interval);
 	}, []);
 
+	// Track the currently-displayed portrait so the async refresh can
+	// decide whether to show a fallback. We don't read state directly inside
+	// async callbacks because the closure would capture a stale value.
+	const currentPortraitRef = useRef<string | null>(null);
+	useEffect(() => {
+		currentPortraitRef.current = portraitDataUrl;
+	}, [portraitDataUrl]);
+
 	const refreshCat = useCallback(async () => {
 		const c = await getCat();
 		setCat(c);
-		if (c?.portrait_path) {
-			try {
-				const raw = await readPortraitBytes(c.portrait_path);
-				// Show the opaque cat instantly so the bottom-right isn't
-				// empty while bg removal runs (1-3s in the webview), then
-				// swap to the transparent version when it's ready.
+		if (!c?.portrait_path) {
+			setPortraitDataUrl(null);
+			return;
+		}
+		try {
+			const raw = await readPortraitBytes(c.portrait_path);
+			// Skip bg removal when the portrait is still an embedded base
+			// PNG — those ship with transparent backgrounds already, so
+			// running the model is wasted work (and a 1-3s flash of the
+			// fallback for no reason).
+			if (c.portrait_is_base) {
 				setPortraitDataUrl(raw);
-				const stripped = await stripBackground(raw);
-				setPortraitDataUrl(stripped);
-			} catch {
-				setPortraitDataUrl(null);
+				return;
 			}
-		} else {
+			// Otherwise: don't reveal the opaque cat. While the strip runs,
+			// keep the previous bg-removed portrait on screen, or fall back
+			// to the breed's static base PNG on cold start.
+			if (currentPortraitRef.current === null) {
+				setPortraitDataUrl(baseImageFor(c.type));
+			}
+			setPortraitDataUrl(await stripBackground(raw));
+		} catch {
 			setPortraitDataUrl(null);
 		}
 	}, []);

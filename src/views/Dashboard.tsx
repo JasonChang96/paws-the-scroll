@@ -1,5 +1,8 @@
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import beanPng from "../../assets/bean.png";
+import mangoPng from "../../assets/mango.png";
+import plutoPng from "../../assets/pluto.png";
 import {
 	getCat,
 	listAggregates,
@@ -10,12 +13,28 @@ import { stripBackground } from "../lib/backgroundRemoval";
 import type { ActivityAggregate, Cat, TaskEvent } from "../lib/types";
 import { useViewStore } from "../lib/viewStore";
 
+function baseImageFor(catType: Cat["type"]): string {
+	switch (catType) {
+		case "orange_fat":
+			return mangoPng;
+		case "void":
+			return plutoPng;
+		case "scrungly_street":
+			return beanPng;
+	}
+}
+
 export function Dashboard() {
 	const setView = useViewStore((s) => s.setView);
 	const [cat, setCat] = useState<Cat | null>(null);
 	const [portraitDataUrl, setPortraitDataUrl] = useState<string | null>(null);
 	const [aggregates, setAggregates] = useState<ActivityAggregate[]>([]);
 	const [events, setEvents] = useState<TaskEvent[]>([]);
+
+	const currentPortraitRef = useRef<string | null>(null);
+	useEffect(() => {
+		currentPortraitRef.current = portraitDataUrl;
+	}, [portraitDataUrl]);
 
 	const refreshAll = useCallback(async () => {
 		const [c, a, e] = await Promise.all([
@@ -26,15 +45,23 @@ export function Dashboard() {
 		setCat(c);
 		setAggregates(a);
 		setEvents(e);
-		if (c?.portrait_path) {
-			try {
-				const raw = await readPortraitBytes(c.portrait_path);
+		if (!c?.portrait_path) {
+			setPortraitDataUrl(null);
+			return;
+		}
+		try {
+			const raw = await readPortraitBytes(c.portrait_path);
+			// Skip bg removal when still on the base PNG (already
+			// transparent). Same logic as the overlay.
+			if (c.portrait_is_base) {
 				setPortraitDataUrl(raw);
-				setPortraitDataUrl(await stripBackground(raw));
-			} catch {
-				setPortraitDataUrl(null);
+				return;
 			}
-		} else {
+			if (currentPortraitRef.current === null) {
+				setPortraitDataUrl(baseImageFor(c.type));
+			}
+			setPortraitDataUrl(await stripBackground(raw));
+		} catch {
 			setPortraitDataUrl(null);
 		}
 	}, []);

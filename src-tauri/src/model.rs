@@ -218,6 +218,19 @@ pub struct Cat {
     pub items: Vec<CatItem>,
     pub story_events: Vec<StoryEvent>,
     pub portrait_path: Option<String>,
+    /// True when `portrait_path` still points at one of the embedded base
+    /// PNGs (mango/pluto/bean) — those ship with transparent backgrounds
+    /// already, so the frontend can skip the bg-removal pass entirely.
+    /// Flips to false after any gpt-image-2 regeneration.
+    #[serde(default = "portrait_is_base_default")]
+    pub portrait_is_base: bool,
+}
+
+fn portrait_is_base_default() -> bool {
+    // Default true so old persisted cats (pre this field) are treated as
+    // base — worst case we skip a strip on a previously-regen'd portrait,
+    // user sees the opaque bg until the next regen overwrites it.
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

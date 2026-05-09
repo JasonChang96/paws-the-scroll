@@ -121,11 +121,26 @@ pub struct NonUseItem {
     pub description: String,
 }
 
+/// Single shared HTTP client. `reqwest::Client` keeps a connection pool
+/// internally and uses `Arc` under the hood so cloning is cheap. Sharing
+/// across calls means TLS handshake to api.openai.com happens once per
+/// app run instead of every request — that's ~150-300ms saved on every
+/// chat / image call after the first.
 fn http_client() -> Result<Client> {
-    Client::builder()
+    use std::sync::OnceLock;
+    static SHARED: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = SHARED.get() {
+        return Ok(client.clone());
+    }
+    let client = Client::builder()
         .timeout(Duration::from_mins(1))
+        // Generous pool — image + chat calls in flight together.
+        .pool_idle_timeout(Duration::from_mins(1))
+        .pool_max_idle_per_host(8)
         .build()
-        .context("failed to build OpenAI HTTP client")
+        .context("failed to build OpenAI HTTP client")?;
+    let _ = SHARED.set(client.clone());
+    Ok(client)
 }
 
 fn require_key<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
@@ -320,42 +335,36 @@ fn task_user_prompt(ctx: &TaskContext) -> String {
     if let Some(t) = &ctx.time_of_day_label {
         lines.push(format!("Time of day: {t}"));
     }
-    if ctx.active_streak_seconds > 0 {
+    // Activity signals — only include when *notable*. Always-on numbers
+    // turn into noise the model ignores; conditional inclusion gives the
+    // cat a reason to actually quote them when they're meaningful.
+    if ctx.active_streak_seconds >= 60 * 60 {
         lines.push(format!(
-            "Continuous active streak: {}",
+            "User has been continuously active for {} — long stretch.",
             humanize_seconds(ctx.active_streak_seconds)
         ));
     }
-    if ctx.today_active_seconds > 0 {
+    if ctx.today_social_seconds >= 30 * 60 {
         lines.push(format!(
-            "Today's active time so far: {}",
-            humanize_seconds(ctx.today_active_seconds)
-        ));
-    }
-    if ctx.today_social_seconds > 0 {
-        lines.push(format!(
-            "Today's social-app time: {}",
+            "Notable: today's social-app time is {}.",
             humanize_seconds(ctx.today_social_seconds)
         ));
     }
-    if ctx.today_interruptions > 0 {
+    if ctx.today_interruptions > 1 {
         lines.push(format!(
-            "Interruption count today (including this one): {} (completed {}, skipped {})",
+            "This is interruption #{} today (completed {}, skipped {}).",
             ctx.today_interruptions, ctx.today_completed, ctx.today_dismissed
         ));
     }
     if !ctx.recent_completed_categories.is_empty() {
         lines.push(format!(
-            "Recently completed categories: {}",
+            "Recently completed categories (avoid repeating exactly): {}",
             ctx.recent_completed_categories.join(", ")
         ));
     }
-    if !ctx.recent_dismissed_categories.is_empty() {
-        lines.push(format!(
-            "Recently dismissed categories: {}",
-            ctx.recent_dismissed_categories.join(", ")
-        ));
-    }
+    // `recent_dismissed_categories` and `today_active_seconds` dropped:
+    // dismissals already bias `want_fallback`, and total active time is
+    // too vague to drive a specific task choice.
     if ctx.reroll_index > 0 {
         lines.push(format!(
             "Reroll #{n} — pick something materially different and easier than previous tries.",
@@ -885,9 +894,11 @@ pub async fn regen_cat_portrait(app: AppHandle) -> Result<PortraitResponse, Stri
         .await
         .map_err(|e| e.to_string())?;
     // Persist the freshly-generated path so the dashboard picks it up next
-    // time it reads cat state.
+    // time it reads cat state. Flip `portrait_is_base` since we just got
+    // back a gpt-image-2 output that needs bg removal in the frontend.
     let mut updated = cat;
     updated.portrait_path = Some(response.path.clone());
+    updated.portrait_is_base = false;
     store::write_cat(&app, &updated).map_err(|e| e.to_string())?;
     Ok(response)
 }

@@ -133,6 +133,10 @@ export interface Cat {
 	items: CatItem[];
 	story_events: StoryEvent[];
 	portrait_path: string | null;
+	/// True when portrait_path still points at one of the embedded base
+	/// PNGs (which ship with transparent backgrounds). Frontend skips the
+	/// bg-removal pass entirely in this case.
+	portrait_is_base: boolean;
 }
 
 export interface ActivityAggregate {

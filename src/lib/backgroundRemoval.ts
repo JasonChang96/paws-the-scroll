@@ -1,12 +1,24 @@
-import { preload, removeBackground } from "@imgly/background-removal";
+import {
+	type Config,
+	preload,
+	removeBackground,
+} from "@imgly/background-removal";
 
-/// Pre-warm the ONNX model and WASM runtime. First call to `removeBackground`
-/// would otherwise download ~30 MB of model assets and pay the WASM init
-/// cost; calling this at app boot moves that cost off the critical path.
+/// `isnet_fp16` is ~2x faster than the default `isnet` on WebGPU (Apple
+/// Silicon Metal). Half-precision floats vs fp32 — slight accuracy loss in
+/// the alpha mask, imperceptible for a centered cat illustration. About
+/// 60 MB to download (vs 120 MB for fp32). For older Intel Macs without
+/// WebGPU, `isnet_quint8` would be faster but smaller mask quality.
+const BG_REMOVAL_CONFIG: Config = { model: "isnet_fp16" };
+
+/// Pre-warm the ONNX model and WASM/WebGPU runtime. First call to
+/// `removeBackground` would otherwise download ~60 MB of model assets and
+/// pay the runtime init cost; calling this at app boot moves that cost
+/// off the critical path.
 let preloadPromise: Promise<void> | null = null;
 export function preloadBackgroundRemoval(): Promise<void> {
 	if (!preloadPromise) {
-		preloadPromise = preload().catch((error) => {
+		preloadPromise = preload(BG_REMOVAL_CONFIG).catch((error) => {
 			console.warn("[bgRemoval] preload failed", error);
 			preloadPromise = null;
 			throw error;
@@ -32,7 +44,7 @@ export async function stripBackground(sourceDataUrl: string): Promise<string> {
 	}
 	try {
 		const sourceBlob = await fetch(sourceDataUrl).then((r) => r.blob());
-		const strippedBlob = await removeBackground(sourceBlob);
+		const strippedBlob = await removeBackground(sourceBlob, BG_REMOVAL_CONFIG);
 		const stripped = await blobToDataUrl(strippedBlob);
 		cache.set(sourceDataUrl, stripped);
 		return stripped;
