@@ -104,6 +104,8 @@ Paws The Scroll is evidence-informed behavioral support, not treatment. It is th
 
 It does not try to make me a more optimized person. It gives me a cat that can reach me when I cannot quite reach myself.
 
+Paws The Scroll: get bullied by a cat into caring for yourself, gently.
+
 ## Recording Beats
 
 1. Start on talking head: "The biggest change in my mental health did not start with a productivity system. It started with getting bullied by a cat."
@@ -117,7 +119,7 @@ It does not try to make me a more optimized person. It gives me a cat that can r
 9. Click `I did it`.
 10. Show the cat reaction in the small bottom-right overlay using `gpt-image-2`, the needs update, or the dashboard for only a few seconds.
 11. Mention that time away and task history change cat mood, independence, skills, demeanor, and future portraits.
-12. End on the app or talking head with the punchline.
+12. End on the app or talking head with the tagline: "Paws The Scroll: get bullied by a cat into caring for yourself, gently."
 
 ## Demo Build Priorities
 
