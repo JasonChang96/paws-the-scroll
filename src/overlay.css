@@ -1,0 +1,22 @@
+html,
+body {
+	margin: 0;
+	padding: 0;
+	background: transparent;
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+}
+
+.overlay-root {
+	width: 100%;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #ffffff;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	font-size: 14px;
+	background: rgba(20, 20, 20, 0.8);
+	border-radius: 12px;
+}

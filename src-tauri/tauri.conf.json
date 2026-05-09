@@ -10,8 +10,10 @@
 		"frontendDist": "../dist"
 	},
 	"app": {
+		"macOSPrivateApi": true,
 		"windows": [
 			{
+				"label": "main",
 				"title": "paws-the-scroll",
 				"width": 800,
 				"height": 600
