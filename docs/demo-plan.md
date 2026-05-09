@@ -8,7 +8,7 @@ The video should be a direct screen demo with talking-head narration. Avoid b-ro
 
 ## Core Message
 
-Getting a cat drastically transformed my mental health because she interrupted me. Paws The Scroll recreates that interruption on the desktop: a needy cat appears when device paralysis takes over and turns being stuck into one tiny act of care.
+My cat changed my mental health by doing something software is usually bad at: interrupting me with care, not shame. Paws The Scroll recreates that moment on the desktop: a needy cat appears when device paralysis takes over and turns being stuck into one tiny act of care.
 
 ## Audience
 
@@ -22,7 +22,7 @@ Hackathon dramatic, personal, and funny. The cat should be memorable and a littl
 
 Paws The Scroll is a local-first macOS desktop app:
 
-- **Tauri v2** provides the desktop shell and native macOS window behavior.
+- **Tauri v2** provides the desktop shell and lets the app create native macOS overlay windows that sit above fullscreen apps and follow the user across Spaces.
 - **React + TypeScript** renders onboarding, adoption, dashboard, and overlay UI.
 - **Rust** owns activity tracking, foreground-app detection, scheduling, local storage, cat-state updates, and OpenAI calls.
 - **OpenAI Responses API with `gpt-5.5`** generates cat dialogue, tiny behavioral-activation tasks, completion lines, and structured task bundles.
@@ -58,33 +58,35 @@ For the recording, show at least one visible portrait generation or regenerated 
 
 ## Demo Arc
 
-1. Personal hook: getting a cat transformed my mental health because she interrupted the spiral.
-2. Base app explanation: this is a Tauri macOS desktop app with React UI, Rust-native activity tracking, local storage, and OpenAI calls from Rust.
+1. Personal hook: my cat changed my mental health by interrupting paralysis with care instead of shame.
+2. Base app explanation: this app uses Tauri for native macOS overlays, React for the UI, Rust for activity tracking/local state/OpenAI calls, and local storage by default.
 3. Onboarding/adoption glimpse: show that the user gives goals, boundaries, mobility, environment, tone, and an OpenAI key; then the app generates cat options with `gpt-image-2`.
 4. Problem setup: show a normal stuck-at-computer state with tabs, notes, or an avoided task.
 5. Product moment: trigger the full-screen cat interruption with `Cmd + Ctrl + Opt + P`.
 6. `gpt-5.5` moment: explain that the cat line and tiny task are generated from a structured local context packet.
 7. Payoff: click `I did it`; the cat reacts, needs update, and the app can reward time away.
 8. Cat evolution: explain that task history and time away change mood, independence, skills, demeanor, and future portraits.
-9. Closing line: Paws The Scroll turns paralysis into one tiny act of care.
+9. Closing line: the app does not ask the user to become disciplined; it gives them a cat needy enough to make one tiny action possible.
 
 ## 2-Minute Script
 
-Getting a cat drastically transformed my mental health.
+The biggest change in my mental health did not start with a productivity system.
 
-Not because she gave me productivity tips. Because she interrupted me.
+It started with a cat.
 
-When I am stuck in paralysis, I do not need another dashboard telling me I failed. I need something small, immediate, and hard to ignore.
+Not because she fixed anything for me. Because when I was frozen, she interrupted me with a need I could actually answer.
+
+When I am stuck in paralysis, I do not need another dashboard telling me I failed. I need something small, immediate, and hard to ignore, but not shameful.
 
 So I built Paws The Scroll: a local-first macOS desktop cat that interrupts device paralysis.
 
-The base of the app is Tauri. The interface is React and TypeScript, but the native pieces run in Rust: activity tracking, foreground-app detection, scheduling, local storage, cat state, and the OpenAI client.
+The app uses Tauri for the native macOS shell and overlay behavior, React and TypeScript for the interface, and Rust for the parts that need to be close to the system: activity tracking, foreground-app detection, scheduling, local storage, cat state, and the OpenAI client.
 
 On first launch, I tell the app what I am trying to move toward, what I tend to get stuck in, what my body can handle, where I usually am, and what tasks are off-limits. The OpenAI key is stored locally, and all OpenAI calls go through Rust.
 
 This is also where the first big AI moment happens: `gpt-image-2` generates the cat portraits. The cat starts as a broad personality, but over time its mood, appearance, and demeanor become more specific to me.
 
-Now imagine I am frozen at my laptop. I have been actively using the computer too long, and I am not really choosing the next thing.
+Now imagine I am frozen at my laptop. I have been actively using the computer too long, and I am not really choosing the next thing anymore.
 
 Paws The Scroll tracks active use locally. For the demo, I am using the built-in trigger, `Cmd + Ctrl + Opt + P`, which summons the same full-screen interruption without waiting for the scheduler.
 
@@ -94,18 +96,20 @@ Then it returns a structured task bundle: the cat's need, the dialogue, the task
 
 So instead of saying "be productive," the cat can say: "Human. You have become furniture. Stand up for ten seconds so I know you are alive."
 
-The task is tiny on purpose. Stand up. Drink water. Clear one object. Start one step. Care for the cat becomes a bridge to care for myself.
+The task is tiny on purpose. Stand up. Drink water. Clear one object. Start one step. The cat does not ask me to fix my life. It asks for one act of care small enough to do now.
 
 When I click `I did it`, the cat calms down, its needs update, and the app records what worked. If I spend time away afterward, the cat becomes more independent.
 
-Over time, the cat becomes more owner-like-pet: if I respond well to grounding tasks, it gets calmer; if movement helps, it gets more playful; if I keep working late, it learns to be sleepier and gentler at night. `gpt-image-2` can regenerate portraits when mood, independence, or skills change.
+Over time, the cat becomes more owner-like-pet: if I respond well to grounding tasks, it gets calmer; if movement helps, it gets more playful; if I keep working late, it learns to be sleepier and gentler at night. `gpt-image-2` can regenerate portraits when mood, independence, or skills change, so the cat starts to look and act like a relationship, not a mascot.
 
-Paws The Scroll is evidence-informed behavioral support, not treatment. It is a needy desktop cat that turns paralysis into one tiny act of care.
+Paws The Scroll is evidence-informed behavioral support, not treatment. It is a needy desktop cat that turns the moment where I disappear into my screen into one tiny act of care.
+
+It does not try to make me a more optimized person. It gives me a cat that can reach me when I cannot quite reach myself.
 
 ## Recording Beats
 
-1. Start on talking head: "Getting a cat drastically transformed my mental health..."
-2. Show the app launch or main window and briefly say it is a Tauri macOS app with React UI and Rust-native tracking/storage/OpenAI calls.
+1. Start on talking head: "The biggest change in my mental health did not start with a productivity system. It started with a cat."
+2. Show the app launch or main window and briefly say it uses Tauri for native macOS overlays, React for UI, and Rust for tracking/storage/OpenAI calls.
 3. Show onboarding/profile fields quickly: goals, stuck patterns, mobility, environment, boundaries, tone, and OpenAI key.
 4. Show cat adoption or portrait generation with `gpt-image-2`.
 5. Show a normal stuck-at-computer setup: browser, notes, cluttered tabs, or an avoided task.
@@ -136,4 +140,4 @@ See [Task Personalization](./task-personalization.md) for the longer product pla
 
 ## Recommended Final Line
 
-Paws The Scroll: the cat that bullies you into caring for yourself, gently.
+Paws The Scroll: for the moments when you cannot care for yourself directly, so the cat asks first.
