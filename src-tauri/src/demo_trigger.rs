@@ -11,7 +11,7 @@
 //! With demo mode on in Settings, the activity scheduler stops auto-firing
 //! interruptions, so these shortcuts become the only way to drive the cat.
 
-use crate::model::IndependenceTier;
+use crate::model::{CatMood, IndependenceTier};
 use tauri::{AppHandle, Runtime};
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -110,16 +110,43 @@ async fn force_evolve_cat<R: Runtime>(app: &AppHandle<R>) {
         mood: cat.mood,
         independence_tier: IndependenceTier::from_level(cat.independence_level),
         accessory_set_hash: "v1".into(),
+        variant_index: None,
         skills: cat.skills.clone(),
     };
     match crate::openai::generate_portrait(app, &request).await {
         Ok(response) => {
             cat.portrait_path = Some(response.path);
-            cat.portrait_is_base = false;
+            cat.portrait_is_base = response.background_removed;
             if let Err(error) = crate::store::write_cat(app, &cat) {
                 log::warn!("[demo-trigger] evolve: portrait_path write failed: {error}");
             }
         }
         Err(error) => log::warn!("[demo-trigger] evolve: portrait regen failed: {error}"),
     }
+}
+
+#[tauri::command]
+pub async fn demo_set_cat_mood(app: AppHandle, mood: CatMood) -> Result<(), String> {
+    let Some(mut cat) = crate::store::read_cat(&app).map_err(|e| e.to_string())? else {
+        return Err("no cat found — finish onboarding first".into());
+    };
+    cat.mood = mood;
+    crate::store::write_cat(&app, &cat).map_err(|e| e.to_string())?;
+
+    let request = crate::openai::PortraitRequest {
+        cat_id: cat.id.clone(),
+        cat_type: cat.cat_type,
+        mood: cat.mood,
+        independence_tier: IndependenceTier::from_level(cat.independence_level),
+        accessory_set_hash: "v1".into(),
+        variant_index: None,
+        skills: cat.skills.clone(),
+    };
+    let response = crate::openai::generate_portrait(&app, &request)
+        .await
+        .map_err(|e| e.to_string())?;
+    cat.portrait_path = Some(response.path);
+    cat.portrait_is_base = response.background_removed;
+    crate::store::write_cat(&app, &cat).map_err(|e| e.to_string())?;
+    Ok(())
 }

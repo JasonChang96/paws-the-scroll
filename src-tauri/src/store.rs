@@ -12,7 +12,10 @@ use tauri_plugin_store::{Store, StoreExt};
 
 pub const CAT_UPDATED_EVENT: &str = "cat-updated";
 
-use crate::model::{ActivityAggregate, Cat, Settings, TaskEvent, UserProfile};
+use crate::model::{
+    ActivityAggregate, Cat, CatPortrait, Settings, TaskCatalogueEntry, TaskCategory, TaskEvent,
+    UserProfile,
+};
 
 const STORE_FILE: &str = "paws-the-scroll.json";
 
@@ -21,6 +24,8 @@ const KEY_CAT: &str = "cat";
 const KEY_SETTINGS: &str = "settings";
 const KEY_TASK_EVENTS: &str = "task_events";
 const KEY_AGGREGATES: &str = "activity_aggregates";
+const KEY_CAT_PORTRAITS: &str = "cat_portraits";
+const KEY_TASK_CATALOGUE: &str = "task_catalogue";
 
 fn load_store<R: Runtime>(app: &AppHandle<R>) -> Result<Arc<Store<R>>> {
     app.store(STORE_FILE)
@@ -122,6 +127,117 @@ pub fn read_aggregates<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<ActivityAgg
     Ok(read_typed(app, KEY_AGGREGATES)?.unwrap_or_default())
 }
 
+pub fn read_cat_portraits<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<CatPortrait>> {
+    Ok(read_typed(app, KEY_CAT_PORTRAITS)?.unwrap_or_default())
+}
+
+pub fn write_cat_portraits<R: Runtime>(
+    app: &AppHandle<R>,
+    portraits: &[CatPortrait],
+) -> Result<()> {
+    write_typed(app, KEY_CAT_PORTRAITS, &portraits)
+}
+
+pub fn upsert_cat_portrait<R: Runtime>(
+    app: &AppHandle<R>,
+    portrait: CatPortrait,
+) -> Result<Vec<CatPortrait>> {
+    let mut portraits = read_cat_portraits(app)?;
+    if let Some(existing) = portraits
+        .iter_mut()
+        .find(|existing| existing.id == portrait.id || existing.path == portrait.path)
+    {
+        *existing = portrait;
+    } else {
+        portraits.push(portrait);
+    }
+    write_cat_portraits(app, &portraits)?;
+    Ok(portraits)
+}
+
+pub fn update_cat_portrait<R: Runtime>(
+    app: &AppHandle<R>,
+    path: &str,
+    update: impl FnOnce(&mut CatPortrait),
+) -> Result<Option<CatPortrait>> {
+    let mut portraits = read_cat_portraits(app)?;
+    let Some(portrait) = portraits.iter_mut().find(|portrait| portrait.path == path) else {
+        return Ok(None);
+    };
+    update(portrait);
+    let snapshot = portrait.clone();
+    write_cat_portraits(app, &portraits)?;
+    Ok(Some(snapshot))
+}
+
+pub fn read_task_catalogue<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<TaskCatalogueEntry>> {
+    Ok(read_typed(app, KEY_TASK_CATALOGUE)?.unwrap_or_default())
+}
+
+pub fn write_task_catalogue<R: Runtime>(
+    app: &AppHandle<R>,
+    entries: &[TaskCatalogueEntry],
+) -> Result<()> {
+    write_typed(app, KEY_TASK_CATALOGUE, &entries)
+}
+
+pub fn append_task_catalogue_entry<R: Runtime>(
+    app: &AppHandle<R>,
+    entry: TaskCatalogueEntry,
+) -> Result<()> {
+    let mut entries = read_task_catalogue(app)?;
+    let normalized_title = entry.bundle.task.title.trim().to_lowercase();
+    if entries.iter().any(|existing| {
+        existing.bundle.task.title.trim().to_lowercase() == normalized_title
+            && existing.category == entry.category
+    }) {
+        return Ok(());
+    }
+    entries.push(entry);
+    write_task_catalogue(app, &entries)
+}
+
+pub fn update_task_catalogue_entry<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    update: impl FnOnce(&mut TaskCatalogueEntry),
+) -> Result<Option<TaskCatalogueEntry>> {
+    let mut entries = read_task_catalogue(app)?;
+    let Some(entry) = entries.iter_mut().find(|entry| entry.id == id) else {
+        return Ok(None);
+    };
+    update(entry);
+    let snapshot = entry.clone();
+    write_task_catalogue(app, &entries)?;
+    Ok(Some(snapshot))
+}
+
+#[tauri::command]
+pub fn record_task_catalogue_feedback(
+    app: AppHandle,
+    title: String,
+    category: TaskCategory,
+    outcome: String,
+) -> Result<(), String> {
+    let normalized_title = title.trim().to_lowercase();
+    let mut entries = read_task_catalogue(&app).map_err(|e| e.to_string())?;
+    let Some(entry) = entries.iter_mut().find(|entry| {
+        entry.category == category
+            && entry.bundle.task.title.trim().to_lowercase() == normalized_title
+    }) else {
+        return Ok(());
+    };
+    match outcome.as_str() {
+        "completed" => entry.completed_count = entry.completed_count.saturating_add(1),
+        "dismissed" => entry.dismissed_count = entry.dismissed_count.saturating_add(1),
+        "inaccessible" => {
+            entry.inaccessible_count = entry.inaccessible_count.saturating_add(1);
+        }
+        _ => {}
+    }
+    write_task_catalogue(&app, &entries).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn get_user_profile(app: AppHandle) -> Result<Option<UserProfile>, String> {
     read_user_profile(&app).map_err(|e| e.to_string())
@@ -179,6 +295,8 @@ pub fn factory_reset(app: AppHandle) -> Result<(), String> {
         KEY_SETTINGS,
         KEY_TASK_EVENTS,
         KEY_AGGREGATES,
+        KEY_CAT_PORTRAITS,
+        KEY_TASK_CATALOGUE,
     ] {
         store.delete(key);
     }

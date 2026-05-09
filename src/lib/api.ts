@@ -7,6 +7,7 @@ import type {
 	AppCategory,
 	Cat,
 	CatMood,
+	CatNeedKind,
 	GeneratedTaskBundle,
 	IndependenceTier,
 	Settings,
@@ -35,6 +36,15 @@ export const saveSettings = (settings: Settings): Promise<void> =>
 export const recordTaskEvent = (event: TaskEvent): Promise<void> =>
 	invoke("record_task_event", { event });
 
+export type TaskOutcome = "completed" | "dismissed" | "inaccessible";
+
+export const recordTaskCatalogueFeedback = (
+	title: string,
+	category: TaskCategory,
+	outcome: TaskOutcome,
+): Promise<void> =>
+	invoke("record_task_catalogue_feedback", { title, category, outcome });
+
 export const listTaskEvents = (): Promise<TaskEvent[]> =>
 	invoke("list_task_events");
 
@@ -46,6 +56,9 @@ export const listAggregates = (): Promise<ActivityAggregate[]> =>
 /// back to onboarding after this resolves.
 export const factoryReset = (): Promise<void> => invoke("factory_reset");
 
+export const demoSetCatMood = (mood: CatMood): Promise<void> =>
+	invoke("demo_set_cat_mood", { mood });
+
 export interface InterruptionTaskContext {
 	goals: string[];
 	stuck_patterns: UserProfile["stuck_patterns"];
@@ -55,6 +68,9 @@ export interface InterruptionTaskContext {
 	cat_type: Cat["type"];
 	cat_tone: UserProfile["preferred_tone"];
 	cat_mood: Cat["mood"];
+	cat_needs: Cat["needs"];
+	primary_cat_need: CatNeedKind | null;
+	primary_cat_need_level: number;
 	cat_visible_traits: string[];
 	cat_hidden_traits: string[];
 	current_active_app: string | null;
@@ -85,16 +101,24 @@ export const generateInterruptionTask = (
 ): Promise<GeneratedTaskBundle> =>
 	invoke("generate_interruption_task", { context });
 
+export const selectCatalogueTask = (
+	context: InterruptionTaskContext,
+): Promise<GeneratedTaskBundle | null> =>
+	invoke("select_catalogue_task", { context });
+
+export const warmTaskCatalogue = (
+	context: InterruptionTaskContext,
+): Promise<void> => invoke("warm_task_catalogue", { context });
+
 export interface PortraitRequest {
 	cat_id: string;
 	cat_type: Cat["type"];
 	mood: CatMood;
 	independence_tier: IndependenceTier;
 	accessory_set_hash: string;
+	variant_index?: number | null;
 	skills: SkillId[];
 }
-
-export type TaskOutcome = "completed" | "dismissed" | "inaccessible";
 
 export interface OutcomePayload {
 	category: TaskCategory;
@@ -131,6 +155,7 @@ export const listCatSkills = (): Promise<SkillId[]> =>
 export interface PortraitResponse {
 	path: string;
 	cached: boolean;
+	background_removed: boolean;
 }
 
 export const generateCatPortrait = (
@@ -153,6 +178,9 @@ export const seedInitialPortrait = (
 	catType: Cat["type"],
 ): Promise<PortraitResponse> =>
 	invoke("seed_initial_portrait", { catId, catType });
+
+export const warmCatPortraitCatalogue = (catId: string): Promise<void> =>
+	invoke("warm_cat_portrait_catalogue", { catId });
 
 export const readPortraitBytes = (path: string): Promise<string> =>
 	invoke("read_portrait_bytes", { path });

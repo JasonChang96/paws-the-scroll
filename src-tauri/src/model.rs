@@ -126,12 +126,47 @@ impl IndependenceTier {
 pub enum CatMood {
     #[default]
     Content,
+    Peckish,
+    Hungry,
+    Lonely,
+    Restless,
+    Playful,
+    Unkempt,
+    Demanding,
     Smug,
     Sulky,
     Excited,
     Dramatic,
     Sleepy,
     Affectionate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortraitPurpose {
+    #[default]
+    Core,
+    Outcome,
+    Evolved,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CatPortrait {
+    pub id: String,
+    pub cat_id: String,
+    pub mood: CatMood,
+    pub independence_tier: IndependenceTier,
+    pub skills_hash: String,
+    pub variant_index: u8,
+    pub purpose: PortraitPurpose,
+    pub path: String,
+    #[serde(default)]
+    pub raw_path: Option<String>,
+    pub is_core: bool,
+    pub background_removed: bool,
+    pub generated_at: DateTime<Utc>,
+    pub last_shown_at: Option<DateTime<Utc>>,
+    pub display_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,6 +302,24 @@ pub struct TaskEvent {
     pub completed: bool,
     pub dismissed: bool,
     pub marked_inaccessible: bool,
+    #[serde(default)]
+    pub need: Option<CatNeed>,
+    #[serde(default)]
+    pub task_title: Option<String>,
+    #[serde(default)]
+    pub task_instruction: Option<String>,
+    #[serde(default)]
+    pub cat_line: Option<String>,
+    #[serde(default)]
+    pub completion_line: Option<String>,
+    #[serde(default)]
+    pub estimated_seconds: Option<u32>,
+    #[serde(default)]
+    pub active_app_category_at_show: Option<String>,
+    #[serde(default)]
+    pub primary_cat_need_at_show: Option<CatNeed>,
+    #[serde(default)]
+    pub primary_cat_need_level_at_show: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -323,4 +376,20 @@ pub struct GeneratedTaskBundle {
     pub task: GeneratedTask,
     pub completion_line: String,
     pub safety_notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCatalogueEntry {
+    pub id: String,
+    pub bundle: GeneratedTaskBundle,
+    pub category: TaskCategory,
+    pub need: CatNeed,
+    pub mobility_level: Mobility,
+    pub fallback_safe: bool,
+    pub created_at: DateTime<Utc>,
+    pub last_shown_at: Option<DateTime<Utc>>,
+    pub display_count: u32,
+    pub completed_count: u32,
+    pub dismissed_count: u32,
+    pub inaccessible_count: u32,
 }

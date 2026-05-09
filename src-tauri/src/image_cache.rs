@@ -1,7 +1,7 @@
-//! On-disk PNG cache for cat sprites. Keyed by a stable hash of
+//! On-disk cache for cat sprites. Keyed by a stable hash of
 //! (`cat_id`, mood, `independence_tier`, `accessory_set_hash`) so sprite
 //! evolution can re-use previous combinations without re-paying the
-//! `gpt-image-1` latency budget.
+//! image-generation latency budget.
 
 use std::path::{Path, PathBuf};
 
@@ -38,15 +38,23 @@ pub fn make_key(parts: &[&str]) -> String {
 }
 
 pub fn path_for_key<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<PathBuf> {
-    // Always `.png` — the canonical output is the rembg-processed PNG with
-    // alpha. If rembg is unavailable, we save raw JPEG bytes to the same
-    // path; `read_portrait_bytes` sniffs the actual format from magic
-    // bytes so the data URL gets the correct mime regardless.
+    display_path_for_key(app, key)
+}
+
+pub fn display_path_for_key<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<PathBuf> {
     Ok(cache_dir(app)?.join(format!("cat-{key}.png")))
+}
+
+pub fn raw_path_for_key<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<PathBuf> {
+    Ok(cache_dir(app)?.join(format!("cat-{key}.raw.jpg")))
 }
 
 pub fn read_cached(path: &Path) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
+}
+
+pub fn is_png(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|bytes| bytes.starts_with(&[0x89, b'P', b'N', b'G']))
 }
 
 pub fn write_cached(path: &Path, bytes: &[u8]) -> Result<()> {

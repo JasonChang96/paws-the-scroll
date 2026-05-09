@@ -14,9 +14,13 @@ import {
 	persistStrippedPortrait,
 	predictOutcomePortraits,
 	readPortraitBytes,
+	recordTaskCatalogueFeedback,
 	recordTaskEvent,
 	regenCatPortrait,
+	selectCatalogueTask,
 	type TaskOutcome,
+	warmCatPortraitCatalogue,
+	warmTaskCatalogue,
 } from "./lib/api";
 import { stripBackground } from "./lib/backgroundRemoval";
 import {
@@ -25,7 +29,12 @@ import {
 	type InterruptionPayload,
 	onInterruptionRequested,
 } from "./lib/overlayApi";
-import type { Cat, GeneratedTaskBundle, UserProfile } from "./lib/types";
+import type {
+	Cat,
+	CatNeedKind,
+	GeneratedTaskBundle,
+	UserProfile,
+} from "./lib/types";
 import { newId, nowIso } from "./lib/util";
 
 /// Static base PNG fallback shown only when nothing has been bg-removed yet
@@ -57,11 +66,86 @@ type Mode =
 const TASK_READY_EVENT = "paws-task-ready";
 const TASK_RESET_EVENT = "paws-task-reset";
 
+function primaryNeedFor(cat: Cat): {
+	need: CatNeedKind;
+	level: number;
+} {
+	const entries: Array<[CatNeedKind, number]> = [
+		["hungry", cat.needs.hunger],
+		["bored", cat.needs.boredom],
+		["lonely", cat.needs.loneliness],
+		["dirty_litter", cat.needs.dirty_litter],
+		["play", cat.needs.play_drive],
+		["attention", cat.needs.attention],
+	];
+	let need: CatNeedKind = "attention";
+	let level = 0;
+	for (const [candidateNeed, candidateLevel] of entries) {
+		if (candidateLevel > level) {
+			need = candidateNeed;
+			level = candidateLevel;
+		}
+	}
+	return { need, level };
+}
+
+function interruptionContextFor(
+	cat: Cat,
+	profile: UserProfile,
+	payload: InterruptionPayload,
+	rerollIndex: number,
+	completedCategories: string[],
+	dismissedCategories: string[],
+) {
+	const primaryNeed = primaryNeedFor(cat);
+	return {
+		goals: profile.goals,
+		stuck_patterns: profile.stuck_patterns,
+		mobility: profile.mobility_constraints,
+		environment: profile.environment_constraints,
+		task_boundaries: profile.task_boundaries,
+		cat_type: cat.type,
+		cat_tone: profile.preferred_tone,
+		cat_mood: cat.mood,
+		cat_needs: cat.needs,
+		primary_cat_need: primaryNeed.need,
+		primary_cat_need_level: primaryNeed.level,
+		cat_visible_traits: cat.visible_traits,
+		cat_hidden_traits: cat.hidden_traits,
+		current_active_app: payload.active_app?.display_name ?? null,
+		current_active_app_category: payload.active_app_category,
+		current_window_title: payload.active_app?.window_title ?? null,
+		current_browser_url: payload.active_app?.browser_url ?? null,
+		time_of_day_label: payload.time_of_day_label,
+		reroll_index: rerollIndex,
+		recent_completed_categories: completedCategories,
+		recent_dismissed_categories: dismissedCategories,
+		want_fallback: rerollIndex >= 5,
+		goals_notes: profile.goals_notes ?? "",
+		stuck_patterns_notes: profile.stuck_patterns_notes ?? "",
+		tone_notes: profile.tone_notes ?? "",
+		mobility_notes: profile.mobility_notes ?? "",
+		environment_notes: profile.environment_notes ?? "",
+		task_boundaries_notes: profile.task_boundaries_notes ?? "",
+		active_streak_seconds: payload.active_streak_seconds,
+		today_active_seconds: payload.today_active_seconds,
+		today_social_seconds: payload.today_social_seconds,
+		today_interruptions: payload.today_interruptions,
+		today_completed: payload.today_completed,
+		today_dismissed: payload.today_dismissed,
+	};
+}
+
 interface TaskReadyPayload {
 	rerollIndex: number;
 	bundle: GeneratedTaskBundle;
 	payload: InterruptionPayload;
 	disabledUntil: number;
+}
+
+interface PortraitNeedsStripPayload {
+	rawPath: string;
+	displayPath: string;
 }
 
 function OverlayApp() {
@@ -75,6 +159,8 @@ function OverlayApp() {
 	const generationLockRef = useRef(false);
 	const completedCategoriesRef = useRef<string[]>([]);
 	const dismissedCategoriesRef = useRef<string[]>([]);
+	const warmedCatalogueRef = useRef<string | null>(null);
+	const strippingPortraitsRef = useRef<Set<string>>(new Set());
 
 	useEffect(() => {
 		const interval = setInterval(() => setTick((t) => t + 1), 250);
@@ -130,6 +216,36 @@ function OverlayApp() {
 		})();
 	}, [refreshCat]);
 
+	useEffect(() => {
+		if (!cat) return;
+		const catalogueKey = `${cat.id}:${cat.independence_level}:${cat.skills.join(",")}`;
+		if (warmedCatalogueRef.current === catalogueKey) return;
+		warmedCatalogueRef.current = catalogueKey;
+		void warmCatPortraitCatalogue(cat.id);
+		if (!profile) return;
+		void warmTaskCatalogue(
+			interruptionContextFor(
+				cat,
+				profile,
+				{
+					source: "demo_trigger",
+					active_app: null,
+					active_app_category: "other",
+					time_of_day_label: "morning",
+					active_streak_seconds: 0,
+					today_active_seconds: 0,
+					today_social_seconds: 0,
+					today_interruptions: 0,
+					today_completed: 0,
+					today_dismissed: 0,
+				},
+				0,
+				completedCategoriesRef.current,
+				dismissedCategoriesRef.current,
+			),
+		);
+	}, [cat, profile]);
+
 	// Refresh whenever Rust persists a new cat (adoption, task outcome,
 	// time-away rewards). Fires from `store::write_cat`.
 	useEffect(() => {
@@ -142,44 +258,51 @@ function OverlayApp() {
 		return () => unlisten?.();
 	}, [refreshCat]);
 
+	useEffect(() => {
+		let unlisten: (() => void) | undefined;
+		(async () => {
+			unlisten = await listen<PortraitNeedsStripPayload>(
+				"cat-portrait-needs-strip",
+				(event: Event<PortraitNeedsStripPayload>) => {
+					const { rawPath } = event.payload;
+					if (strippingPortraitsRef.current.has(rawPath)) return;
+					strippingPortraitsRef.current.add(rawPath);
+					void (async () => {
+						try {
+							const raw = await readPortraitBytes(rawPath);
+							const stripped = await stripBackground(raw);
+							await persistStrippedPortrait(rawPath, stripped);
+						} catch (error) {
+							console.warn("[bgRemoval] strip job failed", error);
+						} finally {
+							strippingPortraitsRef.current.delete(rawPath);
+						}
+					})();
+				},
+			);
+		})();
+		return () => unlisten?.();
+	}, []);
+
 	const generateAndAnnounce = useCallback(
 		async (rerollIndex: number, payload: InterruptionPayload) => {
 			if (!cat || !profile || generationLockRef.current) return;
 			generationLockRef.current = true;
 			try {
-				const bundle = await generateInterruptionTask({
-					goals: profile.goals,
-					stuck_patterns: profile.stuck_patterns,
-					mobility: profile.mobility_constraints,
-					environment: profile.environment_constraints,
-					task_boundaries: profile.task_boundaries,
-					cat_type: cat.type,
-					cat_tone: profile.preferred_tone,
-					cat_mood: cat.mood,
-					cat_visible_traits: cat.visible_traits,
-					cat_hidden_traits: cat.hidden_traits,
-					current_active_app: payload.active_app?.display_name ?? null,
-					current_active_app_category: payload.active_app_category,
-					current_window_title: payload.active_app?.window_title ?? null,
-					current_browser_url: payload.active_app?.browser_url ?? null,
-					time_of_day_label: payload.time_of_day_label,
-					reroll_index: rerollIndex,
-					recent_completed_categories: completedCategoriesRef.current,
-					recent_dismissed_categories: dismissedCategoriesRef.current,
-					want_fallback: rerollIndex >= 5,
-					goals_notes: profile.goals_notes ?? "",
-					stuck_patterns_notes: profile.stuck_patterns_notes ?? "",
-					tone_notes: profile.tone_notes ?? "",
-					mobility_notes: profile.mobility_notes ?? "",
-					environment_notes: profile.environment_notes ?? "",
-					task_boundaries_notes: profile.task_boundaries_notes ?? "",
-					active_streak_seconds: payload.active_streak_seconds,
-					today_active_seconds: payload.today_active_seconds,
-					today_social_seconds: payload.today_social_seconds,
-					today_interruptions: payload.today_interruptions,
-					today_completed: payload.today_completed,
-					today_dismissed: payload.today_dismissed,
-				});
+				const context = interruptionContextFor(
+					cat,
+					profile,
+					payload,
+					rerollIndex,
+					completedCategoriesRef.current,
+					dismissedCategoriesRef.current,
+				);
+				const catalogueBundle = await selectCatalogueTask(context);
+				const bundle =
+					catalogueBundle ?? (await generateInterruptionTask(context));
+				if (catalogueBundle === null) {
+					void warmTaskCatalogue(context);
+				}
 				const ready: TaskReadyPayload = {
 					rerollIndex,
 					bundle,
@@ -255,6 +378,7 @@ function OverlayApp() {
 			rerollIndex: number,
 		) => {
 			if (!isPrimary) return;
+			const primaryNeed = cat ? primaryNeedFor(cat) : null;
 			const event = {
 				id: newId("evt"),
 				created_at: nowIso(),
@@ -266,8 +390,22 @@ function OverlayApp() {
 				completed: outcome === "completed",
 				dismissed: outcome === "dismissed",
 				marked_inaccessible: outcome === "inaccessible",
+				need: bundle.need,
+				task_title: bundle.task.title,
+				task_instruction: bundle.task.instruction,
+				cat_line: bundle.cat_line,
+				completion_line: bundle.completion_line,
+				estimated_seconds: bundle.task.estimated_seconds,
+				active_app_category_at_show: null,
+				primary_cat_need_at_show: primaryNeed?.need ?? null,
+				primary_cat_need_level_at_show: primaryNeed?.level ?? null,
 			};
 			await recordTaskEvent(event);
+			await recordTaskCatalogueFeedback(
+				bundle.task.title,
+				bundle.task.category,
+				outcome,
+			);
 
 			// Hand off to Rust for the actual cat-state evolution. This
 			// applies category-specific need decrements, derives mood from
@@ -316,7 +454,7 @@ function OverlayApp() {
 			await emit(TASK_RESET_EVENT);
 			await exitInterruption();
 		},
-		[isPrimary],
+		[isPrimary, cat],
 	);
 
 	const reroll = useCallback(
@@ -516,12 +654,7 @@ function TaskCard({
 					>
 						Reroll{rerollIndex >= 4 ? " (easy mode)" : ""}
 					</button>
-					<button
-						type="button"
-						className="ghost"
-						onClick={onDismiss}
-						disabled={locked}
-					>
+					<button type="button" className="ghost" onClick={onDismiss}>
 						Not right now
 					</button>
 				</div>

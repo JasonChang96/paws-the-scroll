@@ -36,6 +36,7 @@ pub fn run() {
     }
 
     builder
+        .manage(overlay::OverlayState::default())
         .invoke_handler(tauri::generate_handler![
             store::get_user_profile,
             store::save_user_profile,
@@ -44,19 +45,24 @@ pub fn run() {
             store::get_settings,
             store::save_settings,
             store::record_task_event,
+            store::record_task_catalogue_feedback,
             store::list_task_events,
             store::list_aggregates,
             store::factory_reset,
             openai::generate_interruption_task,
+            openai::select_catalogue_task,
+            openai::warm_task_catalogue,
             openai::generate_cat_portrait,
             openai::regen_cat_portrait,
             openai::seed_initial_portrait,
+            openai::warm_cat_portrait_catalogue,
             openai::persist_stripped_portrait,
             openai::read_portrait_bytes,
             openai::predict_outcome_portraits,
             activity::request_interruption,
             activity::current_foreground,
             activity::accessibility_trusted,
+            demo_trigger::demo_set_cat_mood,
             overlay::enter_interruption_mode,
             overlay::exit_interruption_mode,
             task_outcome::apply_task_outcome,

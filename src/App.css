@@ -737,6 +737,18 @@ button.primary.danger-button:hover {
 	margin-left: 0.5rem;
 }
 
+.demo-mood-controls {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin-top: 1rem;
+}
+
+.demo-mood-controls button {
+	padding: 0.45rem 0.8rem;
+	font-size: 0.9rem;
+}
+
 .number-row {
 	display: flex;
 	align-items: center;

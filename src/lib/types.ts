@@ -44,6 +44,13 @@ export type TaskCategory =
 
 export type CatMood =
 	| "content"
+	| "peckish"
+	| "hungry"
+	| "lonely"
+	| "restless"
+	| "playful"
+	| "unkempt"
+	| "demanding"
 	| "smug"
 	| "sulky"
 	| "excited"
@@ -163,6 +170,15 @@ export interface TaskEvent {
 	completed: boolean;
 	dismissed: boolean;
 	marked_inaccessible: boolean;
+	need?: CatNeedKind | null;
+	task_title?: string | null;
+	task_instruction?: string | null;
+	cat_line?: string | null;
+	completion_line?: string | null;
+	estimated_seconds?: number | null;
+	active_app_category_at_show?: string | null;
+	primary_cat_need_at_show?: CatNeedKind | null;
+	primary_cat_need_level_at_show?: number | null;
 }
 
 export interface Settings {

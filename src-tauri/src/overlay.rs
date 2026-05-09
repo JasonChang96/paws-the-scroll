@@ -12,6 +12,8 @@
 
 #![allow(dead_code)]
 
+use std::sync::Mutex;
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -47,6 +49,11 @@ pub enum OverlayMode {
 }
 
 pub const OVERLAY_MODE_EVENT: &str = "overlay-mode-changed";
+
+#[derive(Default)]
+pub struct OverlayState {
+    companion_position: Mutex<Option<tauri::PhysicalPosition<i32>>>,
+}
 
 #[cfg(target_os = "macos")]
 pub fn setup_primary_overlay(app: &AppHandle) -> tauri::Result<()> {
@@ -173,6 +180,49 @@ fn position_overlay_bottom_right(app: &AppHandle, label: &str) -> tauri::Result<
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn remember_companion_position(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let Some(state) = app.try_state::<OverlayState>() else {
+        return;
+    };
+    let Ok(position) = window.outer_position() else {
+        log::warn!("[overlay] couldn't read companion position before interruption");
+        return;
+    };
+    let save_result = state.companion_position.lock();
+    match save_result {
+        Ok(mut saved_position) => {
+            *saved_position = Some(position);
+        }
+        Err(error) => {
+            log::warn!("[overlay] couldn't lock companion position state: {error}");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn restore_companion_position(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+) -> tauri::Result<bool> {
+    let Some(state) = app.try_state::<OverlayState>() else {
+        return Ok(false);
+    };
+    let saved_position = state.companion_position.lock();
+    let position = match saved_position {
+        Ok(saved_position) => *saved_position,
+        Err(error) => {
+            log::warn!("[overlay] couldn't lock companion position state: {error}");
+            None
+        }
+    };
+    let Some(position) = position else {
+        return Ok(false);
+    };
+    window.set_position(position)?;
+    Ok(true)
+}
+
 /// Tray menu helper: drag the companion back to a known-visible spot. If the
 /// panel got stuck off-screen or the user lost it, this puts it center-screen
 /// at a slightly bigger size so they can find it, then snaps it back.
@@ -237,6 +287,7 @@ fn expand_to_fullscreen(app: &AppHandle) -> tauri::Result<()> {
     let Some(window) = app.get_webview_window(PRIMARY_OVERLAY_LABEL) else {
         return Ok(());
     };
+    remember_companion_position(app, &window);
     if let Some(monitor) = window.primary_monitor()? {
         let scale = monitor.scale_factor();
         let size = monitor.size();
@@ -257,7 +308,9 @@ fn shrink_to_companion(app: &AppHandle) -> tauri::Result<()> {
         return Ok(());
     };
     window.set_size(tauri::LogicalSize::new(COMPANION_WIDTH, COMPANION_HEIGHT))?;
-    position_overlay_bottom_right(app, PRIMARY_OVERLAY_LABEL)?;
+    if !restore_companion_position(app, &window)? {
+        position_overlay_bottom_right(app, PRIMARY_OVERLAY_LABEL)?;
+    }
     Ok(())
 }
 

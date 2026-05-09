@@ -32,6 +32,8 @@ pub use classifier::AppCategory;
 pub use foreground::ForegroundApp;
 
 const TICK_INTERVAL_SECONDS: u64 = 5;
+const FIRST_ACTIVE_NEED_GROWTH_SECONDS: u32 = 2 * 60 * 60;
+const REPEATING_ACTIVE_NEED_GROWTH_SECONDS: u32 = 60 * 60;
 pub const INTERRUPTION_REQUESTED_EVENT: &str = "interruption-requested";
 
 /// Where an interruption originated. The scheduler fires on the activity
@@ -84,6 +86,7 @@ struct ActivityState {
     next_interruption_due_in_seconds: u32,
     pending_time_away_seconds: u32,
     interruption_acknowledged: bool,
+    next_need_growth_after_active_seconds: u32,
 }
 
 impl ActivityState {
@@ -95,6 +98,7 @@ impl ActivityState {
             next_interruption_due_in_seconds: initial_window,
             pending_time_away_seconds: 0,
             interruption_acknowledged: false,
+            next_need_growth_after_active_seconds: FIRST_ACTIVE_NEED_GROWTH_SECONDS,
         }
     }
 }
@@ -156,6 +160,7 @@ fn tick<R: Runtime>(app: &AppHandle<R>, state: &Mutex<ActivityState>) {
     if is_idle {
         s.active_streak_seconds = 0;
         s.idle_streak_seconds += u32::try_from(TICK_INTERVAL_SECONDS).unwrap_or(5);
+        s.next_need_growth_after_active_seconds = FIRST_ACTIVE_NEED_GROWTH_SECONDS;
         if s.interruption_acknowledged {
             s.pending_time_away_seconds += u32::try_from(TICK_INTERVAL_SECONDS).unwrap_or(5);
         }
@@ -171,6 +176,12 @@ fn tick<R: Runtime>(app: &AppHandle<R>, state: &Mutex<ActivityState>) {
         }
         s.idle_streak_seconds = 0;
         s.active_streak_seconds += u32::try_from(TICK_INTERVAL_SECONDS).unwrap_or(5);
+        if s.active_streak_seconds >= s.next_need_growth_after_active_seconds {
+            apply_active_usage_need_growth(app);
+            s.next_need_growth_after_active_seconds = s
+                .next_need_growth_after_active_seconds
+                .saturating_add(REPEATING_ACTIVE_NEED_GROWTH_SECONDS);
+        }
     }
 
     let _ = store::upsert_aggregate(app, |a| {
@@ -272,6 +283,20 @@ fn tick<R: Runtime>(app: &AppHandle<R>, state: &Mutex<ActivityState>) {
         matches!(category, AppCategory::Social),
     );
     s.interruption_acknowledged = true;
+}
+
+fn apply_active_usage_need_growth<R: Runtime>(app: &AppHandle<R>) {
+    let Ok(Some(mut cat)) = store::read_cat(app) else {
+        return;
+    };
+    let mood = cat_state::apply_active_usage_need_growth(&mut cat);
+    log::info!(
+        "[activity] active-use need growth applied: mood={mood:?} needs={:?}",
+        cat.needs
+    );
+    if let Err(error) = store::write_cat(app, &cat) {
+        log::warn!("[activity] failed to persist cat after active-use growth: {error}");
+    }
 }
 
 #[tauri::command]

@@ -86,6 +86,66 @@ impl NeedField {
     }
 }
 
+pub fn apply_active_usage_need_growth(cat: &mut Cat) -> CatMood {
+    use rand::RngExt;
+    let weighted_needs = [
+        (NeedField::Hunger, 3_u32),
+        (NeedField::Boredom, 4),
+        (NeedField::Loneliness, 3),
+        (NeedField::DirtyLitter, 2),
+        (NeedField::PlayDrive, 4),
+        (NeedField::Attention, 4),
+    ];
+    let total_weight: u32 = weighted_needs.iter().map(|(_, weight)| *weight).sum();
+    let mut pick = rand::rng().random_range(0..total_weight);
+    let mut selected = NeedField::Attention;
+    for (field, weight) in weighted_needs {
+        if pick < weight {
+            selected = field;
+            break;
+        }
+        pick -= weight;
+    }
+    selected.apply_delta(&mut cat.needs, 0.10);
+    cat.mood = mood_from_needs(cat);
+    cat.mood
+}
+
+fn primary_need(cat: &Cat) -> (NeedField, f32) {
+    [
+        (NeedField::Hunger, cat.needs.hunger),
+        (NeedField::Boredom, cat.needs.boredom),
+        (NeedField::Loneliness, cat.needs.loneliness),
+        (NeedField::DirtyLitter, cat.needs.dirty_litter),
+        (NeedField::PlayDrive, cat.needs.play_drive),
+        (NeedField::Attention, cat.needs.attention),
+    ]
+    .into_iter()
+    .max_by(|(_, a), (_, b)| a.total_cmp(b))
+    .unwrap_or((NeedField::Attention, 0.0))
+}
+
+fn mood_from_needs(cat: &Cat) -> CatMood {
+    let (need, value) = primary_need(cat);
+    if value < 0.35 {
+        return CatMood::Content;
+    }
+    match need {
+        NeedField::Hunger => {
+            if value >= 0.65 {
+                CatMood::Hungry
+            } else {
+                CatMood::Peckish
+            }
+        }
+        NeedField::Boredom => CatMood::Restless,
+        NeedField::Loneliness => CatMood::Lonely,
+        NeedField::DirtyLitter => CatMood::Unkempt,
+        NeedField::PlayDrive => CatMood::Playful,
+        NeedField::Attention => CatMood::Demanding,
+    }
+}
+
 /// Apply a task outcome to the cat in-place. Returns metadata the caller
 /// uses to drive UI feedback (regen portrait, surface unlocked skills).
 ///
@@ -211,7 +271,7 @@ fn derive_mood(cat: &Cat, outcome: TaskOutcome) -> CatMood {
         // cat has earned independence and is being *gracious* about it.
         TaskOutcome::Completed => {
             if highest_need > 0.6 {
-                CatMood::Excited
+                mood_from_needs(cat)
             } else if cat.independence_level >= 0.5 && aggregate_need < 0.6 {
                 CatMood::Smug
             } else {

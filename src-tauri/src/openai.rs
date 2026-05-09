@@ -15,28 +15,44 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
+use chrono::Utc;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::cat_bases;
 use crate::cat_state;
 use crate::image_cache;
 use crate::model::{
-    Cat, CatMood, CatTone, CatType, Environment, GeneratedTaskBundle, IndependenceTier, Mobility,
-    SkillId, StuckPattern, TaskBoundary, TaskCategory, TaskEvent,
+    Cat, CatMood, CatNeed, CatNeeds, CatPortrait, CatTone, CatType, Environment,
+    GeneratedTaskBundle, IndependenceTier, Mobility, PortraitPurpose, SkillId, StuckPattern,
+    TaskBoundary, TaskCatalogueEntry, TaskCategory, TaskEvent,
 };
 use crate::store;
 
 const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const CHAT_MODEL: &str = "gpt-5.5";
 const IMAGE_MODEL: &str = "gpt-image-2";
-/// Cached portrait files newer than this window are reused without hitting
-/// gpt-image-2 again. Long enough to cover the typical interruption duration
-/// (5s lockout + reading + reroll loops); short enough that subsequent
-/// interruptions still get fresh art.
-const PORTRAIT_FRESHNESS_WINDOW: Duration = Duration::from_mins(3);
+const TASK_CATALOGUE_TARGET_SIZE: usize = 100;
+const TASK_CATALOGUE_REFILL_BATCH: usize = 5;
+const PORTRAIT_CATALOGUE_CAP_PER_CAT: usize = 24;
+const CORE_PORTRAIT_MOODS: [CatMood; 14] = [
+    CatMood::Content,
+    CatMood::Peckish,
+    CatMood::Hungry,
+    CatMood::Lonely,
+    CatMood::Restless,
+    CatMood::Playful,
+    CatMood::Unkempt,
+    CatMood::Demanding,
+    CatMood::Smug,
+    CatMood::Sulky,
+    CatMood::Excited,
+    CatMood::Dramatic,
+    CatMood::Sleepy,
+    CatMood::Affectionate,
+];
 
 /// Per-path async mutex used to dedupe concurrent `generate_portrait` calls
 /// targeting the same cache key. The disk-freshness check only catches
@@ -69,6 +85,12 @@ pub struct TaskContext {
     pub cat_type: CatType,
     pub cat_tone: CatTone,
     pub cat_mood: CatMood,
+    #[serde(default)]
+    pub cat_needs: CatNeeds,
+    #[serde(default)]
+    pub primary_cat_need: Option<CatNeed>,
+    #[serde(default)]
+    pub primary_cat_need_level: f32,
     pub cat_visible_traits: Vec<String>,
     pub cat_hidden_traits: Vec<String>,
     pub current_active_app: Option<String>,
@@ -117,6 +139,8 @@ pub struct PortraitRequest {
     pub mood: CatMood,
     pub independence_tier: IndependenceTier,
     pub accessory_set_hash: String,
+    #[serde(default)]
+    pub variant_index: Option<u8>,
     /// Skill IDs the cat has earned. The prompt builder turns these into
     /// visual cues so the cat looks the part.
     #[serde(default)]
@@ -127,6 +151,16 @@ pub struct PortraitRequest {
 pub struct PortraitResponse {
     pub path: String,
     pub cached: bool,
+    pub background_removed: bool,
+}
+
+const PORTRAIT_NEEDS_STRIP_EVENT: &str = "cat-portrait-needs-strip";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortraitNeedsStripPayload {
+    pub raw_path: String,
+    pub display_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +231,39 @@ fn humanize_seconds(seconds: u32) -> String {
         format!("{minutes}m")
     } else {
         format!("{seconds}s")
+    }
+}
+
+fn cat_need_label(need: CatNeed) -> &'static str {
+    match need {
+        CatNeed::Hungry => "hungry",
+        CatNeed::Bored => "bored",
+        CatNeed::Lonely => "lonely",
+        CatNeed::DirtyLitter => "dirty litter",
+        CatNeed::Play => "wants play",
+        CatNeed::Attention => "wants attention",
+        CatNeed::Dramatic => "dramatic",
+        CatNeed::CursedFind => "found something cursed",
+    }
+}
+
+fn need_task_bias(need: CatNeed) -> &'static str {
+    match need {
+        CatNeed::Hungry => {
+            "If boundaries allow food tasks, choose a tiny food/feed-the-cat-coded task: get a snack, plan food, or do one small feeding-adjacent care action."
+        }
+        CatNeed::Lonely => {
+            "Choose a task that spends a moment with the cat: look away from the screen, give the cat attention, slow blink, breathe, or sit quietly for 30-60 seconds."
+        }
+        CatNeed::Bored | CatNeed::Play => {
+            "Choose a task with light movement or play energy: stand, stretch, shake out hands, or do one tiny playful reset."
+        }
+        CatNeed::DirtyLitter => {
+            "Choose a small environment reset: clear one item, tidy a surface, throw away one piece of trash, or refresh the immediate space."
+        }
+        CatNeed::Attention | CatNeed::Dramatic | CatNeed::CursedFind => {
+            "Choose a tiny attention reset: turn from the screen, touch a real object, name what is happening, or do one grounding action."
+        }
     }
 }
 
@@ -311,7 +378,7 @@ fn task_system_prompt(ctx: &TaskContext) -> String {
 // Single coherent prompt builder; splitting it into sub-functions would just
 // create artificial seams without making the flow easier to read.
 #[allow(clippy::too_many_lines)]
-fn task_user_prompt(ctx: &TaskContext) -> String {
+fn task_user_prompt(ctx: &TaskContext, history: &[TaskEvent]) -> String {
     let mut lines = Vec::new();
     if !ctx.goals.is_empty() {
         lines.push(format!("User goals: {}", ctx.goals.join(", ")));
@@ -380,6 +447,23 @@ fn task_user_prompt(ctx: &TaskContext) -> String {
     if let Some(t) = &ctx.time_of_day_label {
         lines.push(format!("Time of day: {t}"));
     }
+    if let Some(need) = ctx.primary_cat_need {
+        lines.push(format!(
+            "Cat's current strongest need: {} at {:.0}%. {}",
+            cat_need_label(need),
+            ctx.primary_cat_need_level.clamp(0.0, 1.0) * 100.0,
+            need_task_bias(need)
+        ));
+    }
+    lines.push(format!(
+        "Need bars: hunger {:.0}%, boredom {:.0}%, loneliness {:.0}%, litter {:.0}%, play {:.0}%, attention {:.0}%.",
+        ctx.cat_needs.hunger * 100.0,
+        ctx.cat_needs.boredom * 100.0,
+        ctx.cat_needs.loneliness * 100.0,
+        ctx.cat_needs.dirty_litter * 100.0,
+        ctx.cat_needs.play_drive * 100.0,
+        ctx.cat_needs.attention * 100.0,
+    ));
     // Activity signals — only include when *notable*. Always-on numbers
     // turn into noise the model ignores; conditional inclusion gives the
     // cat a reason to actually quote them when they're meaningful.
@@ -406,6 +490,35 @@ fn task_user_prompt(ctx: &TaskContext) -> String {
             "Recently completed categories (avoid repeating exactly): {}",
             ctx.recent_completed_categories.join(", ")
         ));
+    }
+    let recent_tasks: Vec<&TaskEvent> = history
+        .iter()
+        .rev()
+        .filter(|event| event.task_title.is_some())
+        .take(12)
+        .collect();
+    if !recent_tasks.is_empty() {
+        lines.push(String::new());
+        lines.push(
+            "RECENT TASKS SHOWN (avoid repeating title, premise, or exact physical action):".into(),
+        );
+        for event in recent_tasks {
+            let title = event.task_title.as_deref().unwrap_or("");
+            let instruction = event.task_instruction.as_deref().unwrap_or("");
+            let outcome = if event.completed {
+                "completed"
+            } else if event.dismissed {
+                "dismissed"
+            } else if event.marked_inaccessible {
+                "inaccessible"
+            } else {
+                "shown"
+            };
+            lines.push(format!(
+                "- {title}: {instruction} [{outcome}, category {:?}]",
+                event.category
+            ));
+        }
     }
     // `recent_dismissed_categories` and `today_active_seconds` dropped:
     // dismissals already bias `want_fallback`, and total active time is
@@ -583,6 +696,19 @@ fn validate_task(bundle: &GeneratedTaskBundle, ctx: &TaskContext) -> Result<()> 
     {
         bail!("task is food-related but user opted out of food tasks");
     }
+    if ctx.primary_cat_need_level >= 0.6
+        && matches!(ctx.primary_cat_need, Some(CatNeed::Hungry))
+        && !ctx.task_boundaries.contains(&TaskBoundary::NoFood)
+        && !matches!(task.category, crate::model::TaskCategory::Food)
+    {
+        bail!("cat is hungry; generated task should be food-related");
+    }
+    if ctx.primary_cat_need_level >= 0.6
+        && matches!(ctx.primary_cat_need, Some(CatNeed::Lonely))
+        && !matches!(task.category, crate::model::TaskCategory::Grounding)
+    {
+        bail!("cat is lonely; generated task should spend attention with the cat");
+    }
     if mobility_strictness(task.mobility_level) > mobility_strictness(ctx.mobility) {
         bail!(
             "task mobility {:?} exceeds user mobility {:?}",
@@ -627,7 +753,8 @@ pub async fn generate_task_with_retry<R: Runtime>(
 ) -> Result<GeneratedTaskBundle> {
     let key = require_key(app)?;
     let system_prompt = task_system_prompt(ctx);
-    let user_prompt = task_user_prompt(ctx);
+    let history = store::read_task_events(app).unwrap_or_default();
+    let user_prompt = task_user_prompt(ctx, &history);
     let schema = task_response_schema();
     let tuning = chat_tuning_for(ctx);
 
@@ -656,6 +783,128 @@ pub async fn generate_task_with_retry<R: Runtime>(
         }
     }
     Err(last_error.unwrap_or_else(|| anyhow!("OpenAI task generation failed without error")))
+}
+
+fn task_matches_context(bundle: &GeneratedTaskBundle, ctx: &TaskContext) -> bool {
+    validate_task(bundle, ctx).is_ok()
+        && (ctx.primary_cat_need_level < 0.35 || Some(bundle.need) == ctx.primary_cat_need)
+        && (!ctx.want_fallback || bundle.task.fallback_safe)
+}
+
+fn catalogue_sort_key(entry: &TaskCatalogueEntry) -> (u32, u32, chrono::DateTime<Utc>) {
+    (
+        entry.display_count,
+        entry.dismissed_count + entry.inaccessible_count.saturating_mul(2),
+        entry.last_shown_at.unwrap_or(entry.created_at),
+    )
+}
+
+fn context_variants_for_catalogue(ctx: &TaskContext) -> Vec<TaskContext> {
+    let needs = [
+        CatNeed::Hungry,
+        CatNeed::Bored,
+        CatNeed::Lonely,
+        CatNeed::DirtyLitter,
+        CatNeed::Play,
+        CatNeed::Attention,
+    ];
+    needs
+        .into_iter()
+        .map(|need| {
+            let mut next = ctx.clone();
+            next.primary_cat_need = Some(need);
+            next.primary_cat_need_level = 0.75;
+            next.want_fallback = false;
+            next.recent_completed_categories.clear();
+            next.recent_dismissed_categories.clear();
+            next
+        })
+        .collect()
+}
+
+fn make_task_catalogue_entry(bundle: GeneratedTaskBundle) -> TaskCatalogueEntry {
+    TaskCatalogueEntry {
+        id: format!("task_{}", uuid::Uuid::new_v4()),
+        category: bundle.task.category,
+        need: bundle.need,
+        mobility_level: bundle.task.mobility_level,
+        fallback_safe: bundle.task.fallback_safe,
+        bundle,
+        created_at: Utc::now(),
+        last_shown_at: None,
+        display_count: 0,
+        completed_count: 0,
+        dismissed_count: 0,
+        inaccessible_count: 0,
+    }
+}
+
+async fn refill_task_catalogue<R: Runtime>(app: &AppHandle<R>, ctx: TaskContext) {
+    let existing = store::read_task_catalogue(app).unwrap_or_default();
+    if existing.len() >= TASK_CATALOGUE_TARGET_SIZE {
+        return;
+    }
+    let remaining = TASK_CATALOGUE_TARGET_SIZE - existing.len();
+    let count = remaining.min(TASK_CATALOGUE_REFILL_BATCH);
+    let variants = context_variants_for_catalogue(&ctx);
+    for index in 0..count {
+        let Some(task_context) = variants.get(index % variants.len()).cloned() else {
+            return;
+        };
+        match generate_task_with_retry(app, &task_context).await {
+            Ok(bundle) => {
+                let title = bundle.task.title.clone();
+                let entry = make_task_catalogue_entry(bundle);
+                if let Err(error) = store::append_task_catalogue_entry(app, entry) {
+                    log::warn!("[openai] failed to store task catalogue entry: {error}");
+                } else {
+                    log::info!("[openai] task catalogue stored: {title}");
+                }
+            }
+            Err(error) => log::warn!("[openai] task catalogue refill failed: {error}"),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn warm_task_catalogue<R: Runtime>(
+    app: AppHandle<R>,
+    context: TaskContext,
+) -> Result<(), String> {
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        refill_task_catalogue(&app_clone, context).await;
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn select_catalogue_task<R: Runtime>(
+    app: AppHandle<R>,
+    context: TaskContext,
+) -> Result<Option<GeneratedTaskBundle>, String> {
+    let mut entries = store::read_task_catalogue(&app).map_err(|e| e.to_string())?;
+    entries.retain(|entry| task_matches_context(&entry.bundle, &context));
+    entries.sort_by_key(catalogue_sort_key);
+    let Some(selected) = entries.into_iter().next() else {
+        let app_clone = app.clone();
+        tauri::async_runtime::spawn(async move {
+            refill_task_catalogue(&app_clone, context).await;
+        });
+        return Ok(None);
+    };
+    let selected_id = selected.id.clone();
+    let bundle = selected.bundle.clone();
+    let _ = store::update_task_catalogue_entry(&app, &selected_id, |entry| {
+        entry.display_count = entry.display_count.saturating_add(1);
+        entry.last_shown_at = Some(Utc::now());
+    })
+    .map_err(|e| e.to_string())?;
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        refill_task_catalogue(&app_clone, context).await;
+    });
+    Ok(Some(bundle))
 }
 
 #[derive(Deserialize)]
@@ -748,6 +997,13 @@ fn portrait_prompt(req: &PortraitRequest) -> String {
     // microexpressions the model would average out.
     let mood = match req.mood {
         CatMood::Content => "relaxed, neutral expression, eyes forward, calm posture",
+        CatMood::Peckish => "mildly hungry, expectant eyes, tiny impatient paw lift, hopeful but not frantic",
+        CatMood::Hungry => "clearly hungry, pleading round eyes, mouth slightly open as if yelling for food, alert forward posture",
+        CatMood::Lonely => "lonely and soft, leaning toward the viewer, ears slightly drooped, wanting company",
+        CatMood::Restless => "restless and under-stimulated, tail twitching, paws ready to move, impatient energy",
+        CatMood::Playful => "playful, bright eyes, pouncing crouch, tail up, mischievous and ready for a game",
+        CatMood::Unkempt => "unkempt and bothered, slightly ruffled fur, offended expression, wants the space cleaned",
+        CatMood::Demanding => "demanding attention, intense eye contact, one paw raised, bossy but affectionate",
         CatMood::Smug => "clearly proud and pleased, lifted chin, slow-blink half-closed eyes, faint smile, chest puffed out",
         CatMood::Sulky => "visibly disappointed, head turned slightly away, ears flattened, no eye contact, downcast eyes, hunched posture",
         CatMood::Excited => "wide bright eyes, ears perked sharply forward, mid-celebratory wiggle, mouth slightly open, alert and energized",
@@ -787,33 +1043,213 @@ const PORTRAIT_STYLE_ANCHOR: &str = "Keep the cozy hand-painted illustration sty
 soft sketchy outlines, plush readable shapes, warm painterly shading, \
 hand-crafted desktop-pet feel — never vector-clean.";
 
+fn label_for<T: Serialize>(value: T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+fn request_skills_hash(req: &PortraitRequest) -> String {
+    cat_state::skill_set_hash(&req.skills)
+}
+
+fn matching_catalogue_portrait<R: Runtime>(
+    app: &AppHandle<R>,
+    req: &PortraitRequest,
+) -> Result<Option<CatPortrait>> {
+    let skills_hash = request_skills_hash(req);
+    let mut matches: Vec<CatPortrait> = store::read_cat_portraits(app)?
+        .into_iter()
+        .filter(|portrait| {
+            portrait.cat_id == req.cat_id
+                && portrait.mood == req.mood
+                && portrait.independence_tier == req.independence_tier
+                && portrait.skills_hash == skills_hash
+                && portrait.background_removed
+                && image_cache::is_png(std::path::Path::new(&portrait.path))
+        })
+        .collect();
+    matches.sort_by_key(|portrait| (portrait.display_count, portrait.last_shown_at));
+    Ok(matches.into_iter().next())
+}
+
+fn emit_portrait_needs_strip<R: Runtime>(
+    app: &AppHandle<R>,
+    raw_path: String,
+    display_path: String,
+) {
+    if let Err(error) = app.emit(
+        PORTRAIT_NEEDS_STRIP_EVENT,
+        PortraitNeedsStripPayload {
+            raw_path,
+            display_path,
+        },
+    ) {
+        log::warn!("[openai] failed to emit portrait strip request: {error}");
+    }
+}
+
+fn mark_portrait_shown<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<Option<CatPortrait>> {
+    store::update_cat_portrait(app, path, |portrait| {
+        portrait.display_count = portrait.display_count.saturating_add(1);
+        portrait.last_shown_at = Some(Utc::now());
+    })
+}
+
+fn next_variant_index<R: Runtime>(app: &AppHandle<R>, req: &PortraitRequest) -> Result<u8> {
+    if let Some(index) = req.variant_index {
+        return Ok(index);
+    }
+    let skills_hash = request_skills_hash(req);
+    let next = store::read_cat_portraits(app)?
+        .into_iter()
+        .filter(|portrait| {
+            portrait.cat_id == req.cat_id
+                && portrait.mood == req.mood
+                && portrait.independence_tier == req.independence_tier
+                && portrait.skills_hash == skills_hash
+        })
+        .map(|portrait| portrait.variant_index)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    Ok(next)
+}
+
+fn catalogue_key_parts(
+    req: &PortraitRequest,
+    cat_type_label: &str,
+    mood_label: &str,
+    tier_label: &str,
+    skills_hash: &str,
+    variant_index: u8,
+) -> Vec<String> {
+    vec![
+        req.cat_id.clone(),
+        cat_type_label.to_owned(),
+        mood_label.to_owned(),
+        tier_label.to_owned(),
+        req.accessory_set_hash.clone(),
+        skills_hash.to_owned(),
+        format!("variant{variant_index}"),
+    ]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn new_catalogue_portrait(
+    req: &PortraitRequest,
+    skills_hash: String,
+    variant_index: u8,
+    path: String,
+    raw_path: Option<String>,
+    purpose: PortraitPurpose,
+    is_core: bool,
+    background_removed: bool,
+) -> CatPortrait {
+    CatPortrait {
+        id: format!("portrait_{}", uuid::Uuid::new_v4()),
+        cat_id: req.cat_id.clone(),
+        mood: req.mood,
+        independence_tier: req.independence_tier,
+        skills_hash,
+        variant_index,
+        purpose,
+        path,
+        raw_path,
+        is_core,
+        background_removed,
+        generated_at: Utc::now(),
+        last_shown_at: None,
+        display_count: 0,
+    }
+}
+
+fn enforce_portrait_catalogue_cap<R: Runtime>(app: &AppHandle<R>, cat_id: &str) -> Result<()> {
+    let mut portraits = store::read_cat_portraits(app)?;
+    let count_for_cat = portraits
+        .iter()
+        .filter(|portrait| portrait.cat_id == cat_id)
+        .count();
+    if count_for_cat <= PORTRAIT_CATALOGUE_CAP_PER_CAT {
+        return Ok(());
+    }
+
+    let current_path = store::read_cat(app)?
+        .and_then(|cat| {
+            if cat.id == cat_id {
+                cat.portrait_path
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+    let mut removable: Vec<CatPortrait> = portraits
+        .iter()
+        .filter(|portrait| portrait.cat_id == cat_id && !portrait.is_core)
+        .filter(|portrait| portrait.path != current_path)
+        .cloned()
+        .collect();
+    removable.sort_by_key(|portrait| (portrait.last_shown_at, portrait.generated_at));
+
+    let excess = count_for_cat - PORTRAIT_CATALOGUE_CAP_PER_CAT;
+    let remove_paths: Vec<String> = removable
+        .into_iter()
+        .take(excess)
+        .map(|portrait| portrait.path)
+        .collect();
+    if remove_paths.is_empty() {
+        return Ok(());
+    }
+    portraits.retain(|portrait| !remove_paths.iter().any(|path| path == &portrait.path));
+    store::write_cat_portraits(app, &portraits)?;
+    for path in remove_paths {
+        if let Err(error) = std::fs::remove_file(&path) {
+            log::warn!("[openai] failed to evict old portrait {path}: {error}");
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
 pub async fn generate_portrait<R: Runtime>(
     app: &AppHandle<R>,
     req: &PortraitRequest,
 ) -> Result<PortraitResponse> {
-    let cat_type_label = serde_json::to_value(req.cat_type)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default();
-    let mood_label = serde_json::to_value(req.mood)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default();
-    let tier_label = serde_json::to_value(req.independence_tier)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default();
-    let skills_hash = cat_state::skill_set_hash(&req.skills);
-    let key_parts = [
-        req.cat_id.as_str(),
-        cat_type_label.as_str(),
-        mood_label.as_str(),
-        tier_label.as_str(),
-        req.accessory_set_hash.as_str(),
-        skills_hash.as_str(),
-    ];
-    let key = image_cache::make_key(&key_parts);
-    let path = image_cache::path_for_key(app, &key)?;
+    if req.variant_index.is_none() {
+        if let Some(portrait) = matching_catalogue_portrait(app, req)? {
+            let portrait = mark_portrait_shown(app, &portrait.path)?.unwrap_or(portrait);
+            log::info!(
+                "[openai] portrait catalogue hit cat_id={} mood={} variant={}",
+                req.cat_id,
+                label_for(req.mood),
+                portrait.variant_index
+            );
+            return Ok(PortraitResponse {
+                path: portrait.path,
+                cached: true,
+                background_removed: portrait.background_removed,
+            });
+        }
+    }
+
+    let cat_type_label = label_for(req.cat_type);
+    let mood_label = label_for(req.mood);
+    let tier_label = label_for(req.independence_tier);
+    let skills_hash = request_skills_hash(req);
+    let variant_index = next_variant_index(app, req)?;
+    let key_parts = catalogue_key_parts(
+        req,
+        &cat_type_label,
+        &mood_label,
+        &tier_label,
+        &skills_hash,
+        variant_index,
+    );
+    let key_refs: Vec<&str> = key_parts.iter().map(String::as_str).collect();
+    let key = image_cache::make_key(&key_refs);
+    let path = image_cache::display_path_for_key(app, &key)?;
+    let raw_path = image_cache::raw_path_for_key(app, &key)?;
 
     // Serialize concurrent calls targeting the same cache key. Without this,
     // a pre-gen still in flight when the user clicks would let
@@ -825,40 +1261,90 @@ pub async fn generate_portrait<R: Runtime>(
     let lock = portrait_lock_for(&path).await;
     let _guard = lock.lock().await;
 
-    // Recent-file cache: if a file exists at this exact state-keyed path
-    // and was written within `PORTRAIT_FRESHNESS_WINDOW`, reuse it. This
-    // lets `predict_outcome_portraits` pre-warm files that the post-click
-    // `regen_cat_portrait` then reuses for an instant swap. Older files
-    // are treated as stale and trigger a fresh API call so we keep the
-    // "every interruption produces new art" property *across* sessions.
-    if let Ok(metadata) = std::fs::metadata(&path) {
-        if let Ok(modified) = metadata.modified() {
-            let age = std::time::SystemTime::now()
-                .duration_since(modified)
-                .unwrap_or_default();
-            if age < PORTRAIT_FRESHNESS_WINDOW {
-                log::info!(
-                    "[openai] portrait cache hit (fresh, age {}s) cat_id={} mood={mood_label}",
-                    age.as_secs(),
-                    req.cat_id
-                );
-                return Ok(PortraitResponse {
-                    path: path.to_string_lossy().into_owned(),
-                    cached: true,
-                });
-            }
+    if std::fs::metadata(&path).is_ok() {
+        let path_str = path.to_string_lossy().into_owned();
+        let raw_path_str = raw_path.to_string_lossy().into_owned();
+        let existing = store::read_cat_portraits(app)?
+            .into_iter()
+            .find(|portrait| portrait.path == path_str);
+        let background_removed = existing
+            .as_ref()
+            .is_some_and(|portrait| portrait.background_removed)
+            && image_cache::is_png(&path);
+        let background_removed =
+            existing.is_none() && image_cache::is_png(&path) || background_removed;
+        if existing.is_some() && !background_removed {
+            let _ = store::update_cat_portrait(app, &path_str, |portrait| {
+                portrait.background_removed = false;
+            });
         }
+        if existing.is_none() {
+            let portrait = new_catalogue_portrait(
+                req,
+                skills_hash,
+                variant_index,
+                path_str.clone(),
+                Some(raw_path_str),
+                PortraitPurpose::Outcome,
+                false,
+                true,
+            );
+            let _ = store::upsert_cat_portrait(app, portrait)?;
+        }
+        if !background_removed {
+            emit_portrait_needs_strip(app, path_str.clone(), path_str.clone());
+            return Ok(PortraitResponse {
+                path: path_str,
+                cached: true,
+                background_removed: false,
+            });
+        }
+        return Ok(PortraitResponse {
+            path: path_str,
+            cached: true,
+            background_removed,
+        });
+    }
+
+    if std::fs::metadata(&raw_path).is_ok() {
+        let raw_path_str = raw_path.to_string_lossy().into_owned();
+        let path_str = path.to_string_lossy().into_owned();
+        let existing = store::read_cat_portraits(app)?
+            .into_iter()
+            .find(|portrait| {
+                portrait.path == path_str
+                    || portrait.raw_path.as_deref() == Some(raw_path_str.as_str())
+            });
+        if existing.is_none() {
+            let portrait = new_catalogue_portrait(
+                req,
+                skills_hash,
+                variant_index,
+                path_str.clone(),
+                Some(raw_path_str.clone()),
+                PortraitPurpose::Outcome,
+                false,
+                false,
+            );
+            let _ = store::upsert_cat_portrait(app, portrait)?;
+        }
+        emit_portrait_needs_strip(app, raw_path_str.clone(), path_str);
+        return Ok(PortraitResponse {
+            path: raw_path_str,
+            cached: true,
+            background_removed: false,
+        });
     }
 
     log::info!(
-        "[openai] regenerating portrait cat_id={} mood={mood_label} tier={tier_label} skills={skills_hash}",
+        "[openai] generating portrait cat_id={} mood={mood_label} tier={tier_label} skills={skills_hash} variant={variant_index}",
         req.cat_id
     );
     let api_key = require_key(app)?;
     let prompt = portrait_prompt(req);
     let base_image = cat_bases::bytes_for(req.cat_type);
     let bytes = call_image_edit(&req.cat_id, &api_key, &prompt, base_image).await?;
-    image_cache::write_cached(&path, &bytes)?;
+    image_cache::write_cached(&raw_path, &bytes)?;
     // The bytes we just wrote include the gpt-image-2 background. If the cat
     // is currently displaying this exact path with `portrait_is_base = true`
     // (a previous run had stripped + persisted at this path), the frontend
@@ -866,15 +1352,33 @@ pub async fn generate_portrait<R: Runtime>(
     // before regen_cat_portrait flips the flag. Invalidate proactively so
     // the strip path always runs for these fresh API bytes.
     let path_str = path.to_string_lossy().into_owned();
+    let raw_path_str = raw_path.to_string_lossy().into_owned();
     if let Ok(Some(mut cat)) = store::read_cat(app) {
-        if cat.portrait_is_base && cat.portrait_path.as_deref() == Some(path_str.as_str()) {
+        if cat.portrait_is_base
+            && (cat.portrait_path.as_deref() == Some(path_str.as_str())
+                || cat.portrait_path.as_deref() == Some(raw_path_str.as_str()))
+        {
             cat.portrait_is_base = false;
             let _ = store::write_cat(app, &cat);
         }
     }
+    let portrait = new_catalogue_portrait(
+        req,
+        skills_hash,
+        variant_index,
+        path_str.clone(),
+        Some(raw_path_str.clone()),
+        PortraitPurpose::Outcome,
+        false,
+        false,
+    );
+    let _ = store::upsert_cat_portrait(app, portrait)?;
+    emit_portrait_needs_strip(app, raw_path_str.clone(), path_str.clone());
+    enforce_portrait_catalogue_cap(app, &req.cat_id)?;
     Ok(PortraitResponse {
-        path: path_str,
+        path: raw_path_str,
         cached: false,
+        background_removed: false,
     })
 }
 
@@ -909,6 +1413,14 @@ pub async fn persist_stripped_portrait<R: Runtime>(
     path: String,
     data_url: String,
 ) -> Result<(), String> {
+    let mut portraits = store::read_cat_portraits(&app).map_err(|e| e.to_string())?;
+    let portrait_index = portraits.iter().position(|portrait| {
+        portrait.path == path || portrait.raw_path.as_deref() == Some(path.as_str())
+    });
+    let target_path = portrait_index
+        .and_then(|index| portraits.get(index).map(|portrait| portrait.path.clone()))
+        .unwrap_or_else(|| path.clone());
+
     let comma = data_url
         .find(',')
         .ok_or_else(|| "input is not a data URL".to_string())?;
@@ -916,15 +1428,37 @@ pub async fn persist_stripped_portrait<R: Runtime>(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64.as_bytes())
         .map_err(|e| e.to_string())?;
-    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    if !bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        let _ = store::update_cat_portrait(&app, &target_path, |portrait| {
+            portrait.background_removed = false;
+        });
+        return Err(
+            "background removal did not produce a PNG; leaving portrait marked unstripped".into(),
+        );
+    }
+    std::fs::write(&target_path, &bytes).map_err(|e| e.to_string())?;
     if let Ok(Some(mut cat)) = store::read_cat(&app) {
-        if cat.portrait_path.as_deref() == Some(path.as_str()) && !cat.portrait_is_base {
+        if cat.portrait_path.as_deref() == Some(path.as_str())
+            || cat.portrait_path.as_deref() == Some(target_path.as_str())
+        {
+            cat.portrait_path = Some(target_path.clone());
             cat.portrait_is_base = true;
             store::write_cat(&app, &cat).map_err(|e| e.to_string())?;
         }
     }
+    if let Some(index) = portrait_index {
+        if let Some(portrait) = portraits.get_mut(index) {
+            portrait.path.clone_from(&target_path);
+            portrait.background_removed = true;
+        }
+        store::write_cat_portraits(&app, &portraits).map_err(|e| e.to_string())?;
+    }
+    let _ = store::update_cat_portrait(&app, &target_path, |portrait| {
+        portrait.background_removed = true;
+    })
+    .map_err(|e| e.to_string())?;
     log::info!(
-        "[openai] persisted stripped portrait: {} bytes at {path}",
+        "[openai] persisted stripped portrait: {} bytes at {target_path}",
         bytes.len()
     );
     Ok(())
@@ -963,38 +1497,130 @@ pub fn seed_initial_portrait(
         mood: CatMood::Content,
         independence_tier: IndependenceTier::Tier0,
         accessory_set_hash: "v1".into(),
+        variant_index: Some(0),
         skills: Vec::new(),
     };
-    let cat_type_label = serde_json::to_value(request.cat_type)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default();
-    let mood_label = serde_json::to_value(request.mood)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default();
-    let tier_label = serde_json::to_value(request.independence_tier)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default();
-    let skills_hash = cat_state::skill_set_hash(&request.skills);
-    let key = image_cache::make_key(&[
-        request.cat_id.as_str(),
-        cat_type_label.as_str(),
-        mood_label.as_str(),
-        tier_label.as_str(),
-        request.accessory_set_hash.as_str(),
-        skills_hash.as_str(),
-    ]);
+    let cat_type_label = label_for(request.cat_type);
+    let mood_label = label_for(request.mood);
+    let tier_label = label_for(request.independence_tier);
+    let skills_hash = request_skills_hash(&request);
+    let key_parts = catalogue_key_parts(
+        &request,
+        &cat_type_label,
+        &mood_label,
+        &tier_label,
+        &skills_hash,
+        0,
+    );
+    let key_refs: Vec<&str> = key_parts.iter().map(String::as_str).collect();
+    let key = image_cache::make_key(&key_refs);
     let path = image_cache::path_for_key(&app, &key).map_err(|e| e.to_string())?;
     if image_cache::read_cached(&path).is_none() {
         image_cache::write_cached(&path, cat_bases::bytes_for(cat_type))
             .map_err(|e| e.to_string())?;
     }
+    let portrait = new_catalogue_portrait(
+        &request,
+        skills_hash,
+        0,
+        path.to_string_lossy().into_owned(),
+        None,
+        PortraitPurpose::Core,
+        true,
+        true,
+    );
+    let _ = store::upsert_cat_portrait(&app, portrait).map_err(|e| e.to_string())?;
     Ok(PortraitResponse {
         path: path.to_string_lossy().into_owned(),
         cached: false,
+        background_removed: true,
     })
+}
+
+#[tauri::command]
+pub fn warm_cat_portrait_catalogue<R: Runtime>(
+    app: AppHandle<R>,
+    cat_id: String,
+) -> Result<(), String> {
+    let Some(cat) = store::read_cat(&app).map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    if cat.id != cat_id {
+        return Ok(());
+    }
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        warm_core_portraits(&app_clone, cat).await;
+    });
+    Ok(())
+}
+
+async fn warm_core_portraits<R: Runtime>(app: &AppHandle<R>, cat: Cat) {
+    log::info!(
+        "[openai] warming core portrait catalogue for cat_id={}",
+        cat.id
+    );
+    for mood in CORE_PORTRAIT_MOODS {
+        let request = PortraitRequest {
+            cat_id: cat.id.clone(),
+            cat_type: cat.cat_type,
+            mood,
+            independence_tier: IndependenceTier::from_level(cat.independence_level),
+            accessory_set_hash: "v1".into(),
+            variant_index: Some(0),
+            skills: cat.skills.clone(),
+        };
+        match generate_portrait(app, &request).await {
+            Ok(response) => {
+                let skills_hash = request_skills_hash(&request);
+                let _ = store::update_cat_portrait(app, &response.path, |portrait| {
+                    portrait.purpose = PortraitPurpose::Core;
+                    portrait.is_core = true;
+                    portrait.skills_hash = skills_hash;
+                    portrait.background_removed = response.background_removed;
+                });
+            }
+            Err(error) => {
+                log::warn!(
+                    "[openai] core portrait warm failed cat_id={} mood={}: {error}",
+                    cat.id,
+                    label_for(mood)
+                );
+            }
+        }
+    }
+}
+
+fn queue_catalogue_enrichment<R: Runtime>(app: &AppHandle<R>, request: PortraitRequest) {
+    let Ok(next_index) = next_variant_index(app, &request) else {
+        return;
+    };
+    let mut enrichment_request = request;
+    enrichment_request.variant_index = Some(next_index);
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match generate_portrait(&app_clone, &enrichment_request).await {
+            Ok(response) => {
+                log::info!(
+                    "[openai] background portrait enrichment {} cat_id={} mood={}",
+                    if response.cached {
+                        "reused"
+                    } else {
+                        "generated"
+                    },
+                    enrichment_request.cat_id,
+                    label_for(enrichment_request.mood)
+                );
+            }
+            Err(error) => {
+                log::warn!(
+                    "[openai] background portrait enrichment failed cat_id={} mood={}: {error}",
+                    enrichment_request.cat_id,
+                    label_for(enrichment_request.mood)
+                );
+            }
+        }
+    });
 }
 
 /// Regenerate the portrait for the cat's *current* persisted state. The
@@ -1012,6 +1638,7 @@ pub async fn regen_cat_portrait(app: AppHandle) -> Result<PortraitResponse, Stri
         mood: cat.mood,
         independence_tier: IndependenceTier::from_level(cat.independence_level),
         accessory_set_hash: "v1".into(),
+        variant_index: None,
         skills: cat.skills.clone(),
     };
     let response = generate_portrait(&app, &request)
@@ -1022,8 +1649,11 @@ pub async fn regen_cat_portrait(app: AppHandle) -> Result<PortraitResponse, Stri
     // back a gpt-image-2 output that needs bg removal in the frontend.
     let mut updated = cat;
     updated.portrait_path = Some(response.path.clone());
-    updated.portrait_is_base = false;
+    updated.portrait_is_base = response.background_removed;
     store::write_cat(&app, &updated).map_err(|e| e.to_string())?;
+    if response.cached {
+        queue_catalogue_enrichment(&app, request);
+    }
     Ok(response)
 }
 
@@ -1111,6 +1741,7 @@ async fn predict_one_outcome<R: Runtime>(
         mood: cat.mood,
         independence_tier: IndependenceTier::from_level(cat.independence_level),
         accessory_set_hash: "v1".into(),
+        variant_index: None,
         skills: cat.skills.clone(),
     };
     generate_portrait(app, &request).await

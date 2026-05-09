@@ -1,9 +1,31 @@
 import { useEffect, useState } from "react";
 import { ErrorModal } from "../components/ErrorModal";
-import { factoryReset, getSettings, saveSettings } from "../lib/api";
-import type { Settings as SettingsModel } from "../lib/types";
+import {
+	demoSetCatMood,
+	factoryReset,
+	getSettings,
+	saveSettings,
+} from "../lib/api";
+import type { CatMood, Settings as SettingsModel } from "../lib/types";
 import { useViewStore } from "../lib/viewStore";
 import { CrisisNote } from "./Onboarding";
+
+const DEMO_MOODS: Array<{ mood: CatMood; label: string }> = [
+	{ mood: "content", label: "Content" },
+	{ mood: "peckish", label: "Peckish" },
+	{ mood: "hungry", label: "Hungry" },
+	{ mood: "lonely", label: "Lonely" },
+	{ mood: "restless", label: "Restless" },
+	{ mood: "playful", label: "Playful" },
+	{ mood: "unkempt", label: "Unkempt" },
+	{ mood: "demanding", label: "Demanding" },
+	{ mood: "smug", label: "Smug" },
+	{ mood: "sulky", label: "Sulky" },
+	{ mood: "excited", label: "Excited" },
+	{ mood: "dramatic", label: "Dramatic" },
+	{ mood: "sleepy", label: "Sleepy" },
+	{ mood: "affectionate", label: "Affectionate" },
+];
 
 export function Settings() {
 	const setView = useViewStore((s) => s.setView);
@@ -12,6 +34,7 @@ export function Settings() {
 	const [error, setError] = useState<string | null>(null);
 	const [confirmingReset, setConfirmingReset] = useState(false);
 	const [resetting, setResetting] = useState(false);
+	const [settingMood, setSettingMood] = useState<CatMood | null>(null);
 
 	useEffect(() => {
 		getSettings()
@@ -96,6 +119,28 @@ export function Settings() {
 					/>
 					<span>Demo mode</span>
 				</label>
+				<div className="demo-mood-controls">
+					{DEMO_MOODS.map(({ mood, label }) => (
+						<button
+							type="button"
+							className="ghost"
+							key={mood}
+							onClick={async () => {
+								setSettingMood(mood);
+								try {
+									await demoSetCatMood(mood);
+								} catch (e) {
+									setError(e instanceof Error ? e.message : String(e));
+								} finally {
+									setSettingMood(null);
+								}
+							}}
+							disabled={settingMood !== null}
+						>
+							{settingMood === mood ? "Setting…" : label}
+						</button>
+					))}
+				</div>
 			</section>
 
 			<section>

@@ -4,7 +4,12 @@ import beanPng from "../../assets/bean.png";
 import mangoPng from "../../assets/mango.png";
 import plutoPng from "../../assets/pluto.png";
 import { ErrorModal } from "../components/ErrorModal";
-import { readPortraitBytes, saveCat, seedInitialPortrait } from "../lib/api";
+import {
+	readPortraitBytes,
+	saveCat,
+	seedInitialPortrait,
+	warmCatPortraitCatalogue,
+} from "../lib/api";
 import type { Cat, CatType } from "../lib/types";
 import { newId } from "../lib/util";
 import { useViewStore } from "../lib/viewStore";
@@ -99,6 +104,7 @@ export function CatAdoption() {
 				portrait_is_base: true,
 			};
 			await saveCat(cat);
+			void warmCatPortraitCatalogue(cat.id);
 			setRevealed({ choice, dataUrl, cat });
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
