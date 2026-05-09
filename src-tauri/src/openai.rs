@@ -214,6 +214,9 @@ fn task_system_prompt(ctx: &TaskContext) -> String {
     )
 }
 
+// Single coherent prompt builder; splitting it into sub-functions would just
+// create artificial seams without making the flow easier to read.
+#[allow(clippy::too_many_lines)]
 fn task_user_prompt(ctx: &TaskContext) -> String {
     let mut lines = Vec::new();
     if !ctx.goals.is_empty() {
@@ -295,6 +298,34 @@ fn task_user_prompt(ctx: &TaskContext) -> String {
             n = ctx.reroll_index
         ));
     }
+
+    // Free-form notes, emphasized so the model leans on the user's own
+    // wording rather than the categorical chips. Skip empty ones.
+    let freeform = [
+        ("Goals (in their own words)", &ctx.goals_notes),
+        ("How they tend to get stuck", &ctx.stuck_patterns_notes),
+        ("How they want the cat to talk", &ctx.tone_notes),
+        ("Body / mobility specifics", &ctx.mobility_notes),
+        ("Where they'll be", &ctx.environment_notes),
+        ("Hard nos and limits", &ctx.task_boundaries_notes),
+    ];
+    let freeform_lines: Vec<String> = freeform
+        .iter()
+        .filter_map(|(label, text)| {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(format!("{label}: {trimmed}"))
+            }
+        })
+        .collect();
+    if !freeform_lines.is_empty() {
+        lines.push(String::new());
+        lines.push("USER NOTES (give these more weight than the categories above):".into());
+        lines.extend(freeform_lines);
+    }
+
     lines.push("Generate one cat line, one tiny task, and a short completion line.".to_string());
     lines.join("\n")
 }

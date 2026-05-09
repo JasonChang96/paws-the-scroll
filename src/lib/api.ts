@@ -64,6 +64,12 @@ export interface InterruptionTaskContext {
 	recent_completed_categories: string[];
 	recent_dismissed_categories: string[];
 	want_fallback: boolean;
+	goals_notes: string;
+	stuck_patterns_notes: string;
+	tone_notes: string;
+	mobility_notes: string;
+	environment_notes: string;
+	task_boundaries_notes: string;
 }
 
 export const generateInterruptionTask = (

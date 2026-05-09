@@ -48,6 +48,12 @@ interface DraftProfile {
 	task_boundaries: TaskBoundary[];
 	interruption_intensity: number;
 	api_key: string;
+	goals_notes: string;
+	stuck_patterns_notes: string;
+	tone_notes: string;
+	mobility_notes: string;
+	environment_notes: string;
+	task_boundaries_notes: string;
 }
 
 const SUGGESTED_GOALS = [
@@ -113,6 +119,12 @@ export function Onboarding() {
 		task_boundaries: [],
 		interruption_intensity: 2,
 		api_key: "",
+		goals_notes: "",
+		stuck_patterns_notes: "",
+		tone_notes: "",
+		mobility_notes: "",
+		environment_notes: "",
+		task_boundaries_notes: "",
 	});
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -140,6 +152,12 @@ export function Onboarding() {
 				task_boundaries: draft.task_boundaries,
 				interruption_intensity: draft.interruption_intensity,
 				ai_enabled: true,
+				goals_notes: draft.goals_notes.trim(),
+				stuck_patterns_notes: draft.stuck_patterns_notes.trim(),
+				tone_notes: draft.tone_notes.trim(),
+				mobility_notes: draft.mobility_notes.trim(),
+				environment_notes: draft.environment_notes.trim(),
+				task_boundaries_notes: draft.task_boundaries_notes.trim(),
 			};
 			await saveUserProfile(profile);
 			const settings = await getSettings();
@@ -197,6 +215,12 @@ export function Onboarding() {
 						</Chip>
 					))}
 				</div>
+				<NotesField
+					label="Anything else, in your own words?"
+					placeholder="e.g. Spend less of my evening on TikTok and more time stretching."
+					value={draft.goals_notes}
+					onChange={(v) => setDraft({ ...draft, goals_notes: v })}
+				/>
 				<StepNav onBack={goBack} onNext={goNext} />
 			</>
 		))
@@ -220,6 +244,12 @@ export function Onboarding() {
 						</Chip>
 					))}
 				</div>
+				<NotesField
+					label="Tell me more about how you get stuck"
+					placeholder="e.g. I open Reddit during work and lose 90 minutes before I notice."
+					value={draft.stuck_patterns_notes}
+					onChange={(v) => setDraft({ ...draft, stuck_patterns_notes: v })}
+				/>
 				<StepNav onBack={goBack} onNext={goNext} />
 			</>
 		))
@@ -240,6 +270,12 @@ export function Onboarding() {
 						/>
 					))}
 				</div>
+				<NotesField
+					label="Anything specific the cat should know about your body?"
+					placeholder="e.g. Sore wrist this week, stairs hurt my knees, prefer no twisting."
+					value={draft.mobility_notes}
+					onChange={(v) => setDraft({ ...draft, mobility_notes: v })}
+				/>
 				<StepNav onBack={goBack} onNext={goNext} />
 			</>
 		))
@@ -266,6 +302,12 @@ export function Onboarding() {
 						</Chip>
 					))}
 				</div>
+				<NotesField
+					label="Anything else about where you'll be?"
+					placeholder="e.g. Roommate sleeps in the next room — keep it quiet after 10pm."
+					value={draft.environment_notes}
+					onChange={(v) => setDraft({ ...draft, environment_notes: v })}
+				/>
 				<StepNav onBack={goBack} onNext={goNext} />
 			</>
 		))
@@ -284,6 +326,12 @@ export function Onboarding() {
 						/>
 					))}
 				</div>
+				<NotesField
+					label="Anything the cat should never sound like?"
+					placeholder="e.g. No sarcasm, no shame, no productivity-bro energy."
+					value={draft.tone_notes}
+					onChange={(v) => setDraft({ ...draft, tone_notes: v })}
+				/>
 				<StepNav onBack={goBack} onNext={goNext} />
 			</>
 		))
@@ -307,6 +355,12 @@ export function Onboarding() {
 						</Chip>
 					))}
 				</div>
+				<NotesField
+					label="Other limits worth naming?"
+					placeholder="e.g. Don't suggest calling family, no journaling prompts, never mention exercise."
+					value={draft.task_boundaries_notes}
+					onChange={(v) => setDraft({ ...draft, task_boundaries_notes: v })}
+				/>
 				<StepNav onBack={goBack} onNext={goNext} />
 			</>
 		))
@@ -447,6 +501,31 @@ function StepNav({
 				{nextLabel ?? "Continue"}
 			</button>
 		</div>
+	);
+}
+
+function NotesField({
+	label,
+	placeholder,
+	value,
+	onChange,
+}: {
+	label: string;
+	placeholder: string;
+	value: string;
+	onChange: (next: string) => void;
+}) {
+	return (
+		<label className="notes-field">
+			<span className="notes-field-label">{label}</span>
+			<textarea
+				className="notes-field-input"
+				placeholder={placeholder}
+				rows={3}
+				value={value}
+				onChange={(e) => onChange(e.currentTarget.value)}
+			/>
+		</label>
 	);
 }
 

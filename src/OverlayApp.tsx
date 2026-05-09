@@ -142,6 +142,12 @@ function OverlayApp() {
 					recent_completed_categories: completedCategoriesRef.current,
 					recent_dismissed_categories: dismissedCategoriesRef.current,
 					want_fallback: rerollIndex >= 5,
+					goals_notes: profile.goals_notes ?? "",
+					stuck_patterns_notes: profile.stuck_patterns_notes ?? "",
+					tone_notes: profile.tone_notes ?? "",
+					mobility_notes: profile.mobility_notes ?? "",
+					environment_notes: profile.environment_notes ?? "",
+					task_boundaries_notes: profile.task_boundaries_notes ?? "",
 				});
 				const ready: TaskReadyPayload = {
 					rerollIndex,

@@ -236,6 +236,35 @@ input:focus {
 	margin-top: 0.5rem;
 }
 
+.notes-field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+	margin: 0.5rem 0 1.25rem 0;
+}
+
+.notes-field-label {
+	color: var(--muted);
+	font-size: 0.88rem;
+}
+
+.notes-field-input {
+	font: inherit;
+	border-radius: 12px;
+	border: 1px solid var(--ring);
+	padding: 0.65rem 0.9rem;
+	background: var(--surface);
+	color: var(--ink);
+	resize: vertical;
+	min-height: 70px;
+	line-height: 1.45;
+}
+
+.notes-field-input:focus {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
 .step-nav {
 	display: flex;
 	justify-content: space-between;
