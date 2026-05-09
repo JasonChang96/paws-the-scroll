@@ -80,6 +80,29 @@ button {
 		border-color 0.15s;
 }
 
+button:disabled,
+button[aria-disabled="true"] {
+	cursor: not-allowed;
+}
+
+/* Anything semantically interactive that isn't a <button> — chips,
+ * radio cards, cat cards, toggle labels, summary blocks. Defensive so a
+ * later styling pass can't accidentally drop the pointer. */
+.chip,
+.radio-card,
+.cat-card,
+.toggle-row,
+.danger-button {
+	cursor: pointer;
+}
+
+.chip:disabled,
+.radio-card:disabled,
+.cat-card:disabled,
+.danger-button:disabled {
+	cursor: not-allowed;
+}
+
 button.primary {
 	background: var(--ink);
 	color: var(--surface);

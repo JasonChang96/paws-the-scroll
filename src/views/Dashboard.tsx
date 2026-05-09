@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useState } from "react";
 import {
 	getCat,
 	listAggregates,
@@ -16,27 +17,43 @@ export function Dashboard() {
 	const [aggregates, setAggregates] = useState<ActivityAggregate[]>([]);
 	const [events, setEvents] = useState<TaskEvent[]>([]);
 
-	useEffect(() => {
-		(async () => {
-			const [c, a, e] = await Promise.all([
-				getCat(),
-				listAggregates(),
-				listTaskEvents(),
-			]);
-			setCat(c);
-			setAggregates(a);
-			setEvents(e);
-			if (c?.portrait_path) {
-				try {
-					const raw = await readPortraitBytes(c.portrait_path);
-					setPortraitDataUrl(raw);
-					setPortraitDataUrl(await stripBackground(raw));
-				} catch {
-					setPortraitDataUrl(null);
-				}
+	const refreshAll = useCallback(async () => {
+		const [c, a, e] = await Promise.all([
+			getCat(),
+			listAggregates(),
+			listTaskEvents(),
+		]);
+		setCat(c);
+		setAggregates(a);
+		setEvents(e);
+		if (c?.portrait_path) {
+			try {
+				const raw = await readPortraitBytes(c.portrait_path);
+				setPortraitDataUrl(raw);
+				setPortraitDataUrl(await stripBackground(raw));
+			} catch {
+				setPortraitDataUrl(null);
 			}
-		})();
+		} else {
+			setPortraitDataUrl(null);
+		}
 	}, []);
+
+	useEffect(() => {
+		void refreshAll();
+	}, [refreshAll]);
+
+	// Re-fetch whenever Rust persists a new cat (task outcome regen,
+	// time-away rewards, evolve shortcut). Same plumbing as OverlayApp.
+	useEffect(() => {
+		let unlisten: (() => void) | undefined;
+		(async () => {
+			unlisten = await listen("cat-updated", () => {
+				void refreshAll();
+			});
+		})();
+		return () => unlisten?.();
+	}, [refreshAll]);
 
 	if (!cat) {
 		return (
