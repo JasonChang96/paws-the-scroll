@@ -186,6 +186,13 @@ function OverlayApp() {
 					payload,
 					disabledUntil: Date.now() + 5_000,
 				};
+				// Fire the pre-gen here (primary overlay only, once per task)
+				// rather than from the TASK_READY_EVENT listener — the
+				// listener has a `[cat]` dependency, so cat-updated churn
+				// can briefly produce two live listeners and double-invoke
+				// the command. The portrait per-path lock made that harmless,
+				// but this avoids the wasted IPC + lock churn entirely.
+				void predictOutcomePortraits(cat.id, bundle.task.category);
 				await emit(TASK_READY_EVENT, ready);
 			} catch (e) {
 				const message = e instanceof Error ? e.message : String(e);
@@ -223,23 +230,12 @@ function OverlayApp() {
 						payload: event.payload.payload,
 						disabledUntil: event.payload.disabledUntil,
 					});
-					// Pre-warm the post-click portrait the moment the task is
-					// shown — Rust spawns parallel gpt-image-2 calls for the
-					// Completed and Dismissed mood paths so the click swaps
-					// instantly via the freshness cache. Re-fires per reroll
-					// since task category shapes Completed-mood prediction.
-					if (cat) {
-						void predictOutcomePortraits(
-							cat.id,
-							event.payload.bundle.task.category,
-						);
-					}
 				},
 			);
 			unlisten = off;
 		})();
 		return () => unlisten?.();
-	}, [cat]);
+	}, []);
 
 	useEffect(() => {
 		let unlisten: (() => void) | undefined;
