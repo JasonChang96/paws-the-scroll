@@ -1,5 +1,6 @@
 html,
-body {
+body,
+#root {
 	margin: 0;
 	padding: 0;
 	background: transparent;
@@ -55,11 +56,22 @@ button:disabled {
 	opacity: 0.7;
 }
 
-/* Companion mode — tiny desktop pet sitting in the bottom-right corner,
- * smaller than a dock icon. */
+/* Companion mode — tiny desktop pet sitting in the bottom-right corner.
+ * The panel is 80×80; we leave 8px padding so the circular frame
+ * (border-radius: 50%) doesn't get clipped at the panel's square edges,
+ * and there's room for any future drop shadow we want to add back. */
 .companion {
 	width: 100%;
 	height: 100%;
+	padding: 8px;
+	background: transparent;
+	border: 0;
+	cursor: grab;
+	-webkit-app-region: no-drag;
+}
+
+.companion:active {
+	cursor: grabbing;
 }
 
 .companion-frame {
@@ -68,12 +80,19 @@ button:disabled {
 	background: rgba(255, 250, 242, 0.92);
 	border-radius: 50%;
 	overflow: hidden;
+	/* Inset-only outlines so the shadow doesn't extend outside the small
+	 * panel and get clipped. Two-stop ring for visibility on any wallpaper. */
 	box-shadow:
-		0 4px 14px rgba(53, 30, 12, 0.32),
-		0 0 0 1px rgba(255, 255, 255, 0.55) inset;
+		0 0 0 2px #b85c2a inset,
+		0 0 0 4px rgba(255, 255, 255, 0.85) inset;
 	display: grid;
 	place-items: center;
 	animation: companion-bob 5s ease-in-out infinite;
+	cursor: grab;
+}
+
+.companion-frame:active {
+	cursor: grabbing;
 }
 
 .companion-frame img,
@@ -83,8 +102,17 @@ button:disabled {
 	object-fit: cover;
 }
 
+/* Bright peach + paw emoji so the empty-state companion is unmissable
+ * before the user has adopted a cat. */
 .companion-placeholder {
-	background: #f1c8a8;
+	background: linear-gradient(135deg, #f6a86b 0%, #e0823f 100%);
+	display: grid;
+	place-items: center;
+	font-size: 26px;
+}
+
+.companion-placeholder::before {
+	content: "🐾";
 }
 
 @keyframes companion-bob {
@@ -212,19 +240,46 @@ button:disabled {
 
 .task-card-actions {
 	display: flex;
-	flex-wrap: wrap;
+	flex-direction: column;
+	gap: 0.6rem;
+	margin-top: 0.75rem;
+}
+
+.task-card-primary {
+	width: 100%;
+}
+
+.task-card-actions-secondary {
+	display: flex;
 	gap: 0.5rem;
-	margin-top: 0.5rem;
 }
 
-.task-card-actions .task-card-primary {
-	flex: 1 1 100%;
-	margin-bottom: 0.25rem;
+.task-card-actions-secondary > button {
+	flex: 1 1 0;
 }
 
+/* Quiet text-link affordance — present but not competing with the primary
+ * action. Reserved for "this category genuinely doesn't fit me", separate
+ * from the everyday "not right now" dismiss. */
 .task-card-inaccessible {
-	margin-left: auto;
+	background: transparent;
+	border: 0;
 	color: #6b5b50;
+	font-size: 0.85rem;
+	cursor: pointer;
+	padding: 0.4rem 0;
+	text-decoration: underline;
+	text-underline-offset: 3px;
+	align-self: center;
+}
+
+.task-card-inaccessible:hover:not(:disabled) {
+	color: #2a1f1a;
+}
+
+.task-card-inaccessible:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
 }
 
 .task-card-hint {

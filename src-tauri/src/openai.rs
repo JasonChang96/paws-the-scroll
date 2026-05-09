@@ -17,6 +17,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime};
 
+use crate::cat_bases;
 use crate::cat_state;
 use crate::image_cache;
 use crate::model::{
@@ -367,16 +368,17 @@ fn extract_output_text(envelope: ResponsesEnvelope) -> Option<String> {
         .and_then(|content| content.text)
 }
 
-/// Optional knobs that aren't part of the prompt content.
+/// Optional knobs that aren't part of the prompt content. `seed` and
+/// `temperature` are deliberately omitted — gpt-5.5 (and reasoning models in
+/// general) reject sampling-control params because internal reasoning tokens
+/// have their own sampling. The Responses API returns a 400 if either is
+/// included, even with `reasoning.effort: "none"`.
 #[derive(Debug, Clone, Default)]
 struct ChatTuning {
     /// Stable identifier for the prompt prefix bucket. `OpenAI` uses this to
     /// improve cache routing for repeated calls; cat-tone-stable rerolls
     /// hit the same bucket so we save on input-token cost.
     cache_key: Option<String>,
-    /// Best-effort deterministic sampling. Only set during demo mode for
-    /// reproducible stage runs — production interruptions stay random.
-    seed: Option<u64>,
 }
 
 async fn call_chat_json<T: serde::de::DeserializeOwned>(
@@ -404,14 +406,10 @@ async fn call_chat_json<T: serde::de::DeserializeOwned>(
             "verbosity": "low",
         },
         "reasoning": { "effort": "none" },
-        "temperature": 0.8,
         "store": false,
     });
     if let Some(key) = &tuning.cache_key {
         body["prompt_cache_key"] = serde_json::Value::String(key.clone());
-    }
-    if let Some(seed) = tuning.seed {
-        body["seed"] = serde_json::Value::Number(seed.into());
     }
     let resp = client
         .post(format!("{OPENAI_BASE_URL}/responses"))
@@ -480,7 +478,7 @@ fn mobility_strictness(level: Mobility) -> u8 {
     }
 }
 
-fn chat_tuning_for(ctx: &TaskContext, demo_mode: bool) -> ChatTuning {
+fn chat_tuning_for(ctx: &TaskContext) -> ChatTuning {
     let cache_key = format!(
         "paws/cat/{cat_type:?}/{tone:?}/{fallback}",
         cat_type = ctx.cat_type,
@@ -491,19 +489,8 @@ fn chat_tuning_for(ctx: &TaskContext, demo_mode: bool) -> ChatTuning {
             "normal"
         },
     );
-    let seed = demo_mode.then(|| {
-        use sha2::Digest;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(cache_key.as_bytes());
-        hasher.update([ctx.reroll_index]);
-        let digest = hasher.finalize();
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&digest[..8]);
-        u64::from_be_bytes(bytes)
-    });
     ChatTuning {
         cache_key: Some(cache_key),
-        seed,
     }
 }
 
@@ -512,11 +499,10 @@ pub async fn generate_task_with_retry<R: Runtime>(
     ctx: &TaskContext,
 ) -> Result<GeneratedTaskBundle> {
     let key = require_key(app)?;
-    let demo_mode = store::read_settings(app).is_ok_and(|s| s.demo_mode);
     let system_prompt = task_system_prompt(ctx);
     let user_prompt = task_user_prompt(ctx);
     let schema = task_response_schema();
-    let tuning = chat_tuning_for(ctx, demo_mode);
+    let tuning = chat_tuning_for(ctx);
 
     let mut last_error: Option<anyhow::Error> = None;
     for attempt in 0..3 {
@@ -559,38 +545,45 @@ struct PortraitProgress {
     data_url: String,
 }
 
-/// Streamed image generation. We set `partial_images: 3` so the user sees the
-/// cat resolve from a rough block-out into the final frame on stage.
-/// Each partial costs ~100 extra image-output tokens; with 3 partials the
-/// added cost is ~300 tokens per cat, which we eat for the demo wow factor.
-async fn call_image_generation_streaming<R: Runtime>(
+/// Streamed image *edit* against a hand-drawn base portrait. Switching from
+/// `images/generations` to `images/edits` lets us anchor the visual style to
+/// `assets/{breed}.png` so we don't have to re-describe the style in every
+/// prompt. Multipart payload because the edits endpoint takes the source
+/// image as a file part. `partial_images: 3` still streams partial frames
+/// over SSE, costing ~300 extra image-output tokens per cat.
+async fn call_image_edit_streaming<R: Runtime>(
     app: &AppHandle<R>,
     cat_id: &str,
     api_key: &str,
     prompt: &str,
+    base_image: &'static [u8],
 ) -> Result<Vec<u8>> {
     let client = http_client()?;
-    let body = serde_json::json!({
-        "model": IMAGE_MODEL,
-        "prompt": prompt,
-        "size": "1024x1024",
-        "quality": "low",
-        "background": "opaque",
-        // JPEG is meaningfully faster to encode and ship than PNG; we lose
-        // alpha but gpt-image-2 is opaque-only anyway.
-        "output_format": "jpeg",
-        "stream": true,
-        "partial_images": 3,
-        "n": 1,
-    });
+    let form = reqwest::multipart::Form::new()
+        .text("model", IMAGE_MODEL.to_string())
+        .text("prompt", prompt.to_string())
+        .text("size", "1024x1024")
+        .text("quality", "low")
+        .text("background", "opaque")
+        .text("output_format", "jpeg")
+        .text("stream", "true")
+        .text("partial_images", "3")
+        .text("n", "1")
+        .part(
+            "image",
+            reqwest::multipart::Part::bytes(base_image.to_vec())
+                .file_name("base.png")
+                .mime_str("image/png")
+                .context("failed to set image part mime")?,
+        );
     let resp = client
-        .post(format!("{OPENAI_BASE_URL}/images/generations"))
+        .post(format!("{OPENAI_BASE_URL}/images/edits"))
         .bearer_auth(api_key)
         .header("Accept", "text/event-stream")
-        .json(&body)
+        .multipart(form)
         .send()
         .await
-        .context("OpenAI image stream request failed")?;
+        .context("OpenAI image edit request failed")?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -734,18 +727,11 @@ fn truncate_for_log(s: &str) -> String {
     }
 }
 
+/// Build an *edit* prompt — short, because the base image already carries the
+/// breed and the visual style. We only describe what should *change* from
+/// the base: mood, independence, earned-skill details. Keep the same
+/// character, same composition, same illustration style.
 fn portrait_prompt(req: &PortraitRequest) -> String {
-    let breed = match req.cat_type {
-        CatType::OrangeFat => {
-            "a chunky, theatrical orange tabby cat, round cheeks, food-motivated expression"
-        }
-        CatType::Void => {
-            "a sleek black void cat, big reflective yellow-green eyes, mysterious and observant"
-        }
-        CatType::ScrunglyStreet => {
-            "a scrungly scrappy street cat, slightly scruffy fur, alert pose, weirdly loyal vibe"
-        }
-    };
     let mood = match req.mood {
         CatMood::Content => "calm, content expression",
         CatMood::Smug => "smug, eyes-half-closed satisfaction",
@@ -765,27 +751,22 @@ fn portrait_prompt(req: &PortraitRequest) -> String {
     let skill_clause = if skill_hints.is_empty() {
         String::new()
     } else {
-        format!(" Earned details: {}.", skill_hints.join("; "))
+        format!(" Add: {}.", skill_hints.join("; "))
     };
     format!(
-        "{PORTRAIT_STYLE_GUIDE} \
-         Subject: {breed}. {mood}. {independence}.{skill_clause} \
-         Centered, full body visible, no text."
+        "Same cat, same character, same composition. {PORTRAIT_STYLE_ANCHOR} \
+         Adjust pose and expression: {mood}; {independence}.{skill_clause} \
+         Centered, full body, no text."
     )
 }
 
-/// Style guide pinned to every cat portrait so the breed/mood/skill slots
-/// stay consistent visually across regenerations. Tuned for "emotionally
-/// attached desktop pet" rather than corporate mascot.
-const PORTRAIT_STYLE_GUIDE: &str = "\
-Style: cozy indie-game character illustration with soft hand-painted texture, \
-thick sketchy outlines, slightly imperfect linework, warm lighting, plush \
-readable shapes, expressive but simple facial features, cozy game UI energy, \
-emotionally attached desktop pet vibe, whimsical and absurd but comforting. \
-The style should feel hand-crafted, soft, and warm rather than corporate or \
-vector-clean. Slightly exaggerated proportions, large fluffy shapes, readable \
-silhouette, gentle painterly shading, subtle texture in fur and background. \
-Cute on the surface, emotionally meaningful underneath.";
+/// Compact style anchor included in every edit prompt. The base image carries
+/// the full visual language; this short reminder just keeps edits from
+/// drifting toward vector-clean or corporate-mascot territory across many
+/// regenerations.
+const PORTRAIT_STYLE_ANCHOR: &str = "Keep the cozy hand-painted illustration style: \
+soft sketchy outlines, plush readable shapes, warm painterly shading, \
+hand-crafted desktop-pet feel — never vector-clean.";
 
 pub async fn generate_portrait<R: Runtime>(
     app: &AppHandle<R>,
@@ -823,7 +804,8 @@ pub async fn generate_portrait<R: Runtime>(
     }
     let api_key = require_key(app)?;
     let prompt = portrait_prompt(req);
-    let bytes = call_image_generation_streaming(app, &req.cat_id, &api_key, &prompt).await?;
+    let base_image = cat_bases::bytes_for(req.cat_type);
+    let bytes = call_image_edit_streaming(app, &req.cat_id, &api_key, &prompt, base_image).await?;
     image_cache::write_cached(&path, &bytes)?;
     Ok(PortraitResponse {
         path: path.to_string_lossy().into_owned(),
@@ -855,6 +837,56 @@ pub async fn generate_cat_portrait(
 pub async fn read_portrait_bytes(path: String) -> Result<String, String> {
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+/// Seed the initial portrait at adoption time using the embedded base image.
+/// No `OpenAI` call — the hand-drawn base PNG already *is* the cat in its
+/// starting state (mood=content, tier0, no skills). State-change regenerations
+/// later go through `regen_cat_portrait` and the edit endpoint as usual.
+#[tauri::command]
+pub fn seed_initial_portrait(
+    app: AppHandle,
+    cat_id: String,
+    cat_type: CatType,
+) -> Result<PortraitResponse, String> {
+    let request = PortraitRequest {
+        cat_id: cat_id.clone(),
+        cat_type,
+        mood: CatMood::Content,
+        independence_tier: IndependenceTier::Tier0,
+        accessory_set_hash: "v1".into(),
+        skills: Vec::new(),
+    };
+    let cat_type_label = serde_json::to_value(request.cat_type)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let mood_label = serde_json::to_value(request.mood)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let tier_label = serde_json::to_value(request.independence_tier)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let skills_hash = cat_state::skill_set_hash(&request.skills);
+    let key = image_cache::make_key(&[
+        request.cat_id.as_str(),
+        cat_type_label.as_str(),
+        mood_label.as_str(),
+        tier_label.as_str(),
+        request.accessory_set_hash.as_str(),
+        skills_hash.as_str(),
+    ]);
+    let path = image_cache::path_for_key(&app, &key).map_err(|e| e.to_string())?;
+    if image_cache::read_cached(&path).is_none() {
+        image_cache::write_cached(&path, cat_bases::bytes_for(cat_type))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(PortraitResponse {
+        path: path.to_string_lossy().into_owned(),
+        cached: false,
+    })
 }
 
 /// Regenerate the portrait for the cat's *current* persisted state. The

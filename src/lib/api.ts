@@ -132,5 +132,15 @@ export const generateCatPortrait = (
 export const regenCatPortrait = (): Promise<PortraitResponse> =>
 	invoke("regen_cat_portrait");
 
+/// Seed the cat's initial portrait at adoption time. No OpenAI call — Rust
+/// just writes the embedded base PNG to the sprite cache so subsequent
+/// reads behave the same as a generated portrait. Future state-change
+/// regenerations go through `regenCatPortrait` and hit the edit endpoint.
+export const seedInitialPortrait = (
+	catId: string,
+	catType: Cat["type"],
+): Promise<PortraitResponse> =>
+	invoke("seed_initial_portrait", { catId, catType });
+
 export const readPortraitBytes = (path: string): Promise<string> =>
 	invoke("read_portrait_bytes", { path });

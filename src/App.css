@@ -324,11 +324,12 @@ input:focus {
 }
 
 .cat-card-art {
-	height: 160px;
+	aspect-ratio: 1;
 	display: grid;
 	place-items: center;
 	background: #fff5e7;
 	border-radius: 16px;
+	overflow: hidden;
 }
 
 .error-modal-backdrop {
@@ -437,18 +438,15 @@ button.primary.danger-button:hover {
 	background: #95291f;
 }
 
-.cat-card-emoji {
-	font-size: 96px;
-	line-height: 1;
-	filter: drop-shadow(0 4px 6px rgba(53, 30, 12, 0.18));
+.cat-card-base {
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+	border-radius: 12px;
 	user-select: none;
 }
 
 .cat-card-partial {
-	width: 100%;
-	height: 100%;
-	object-fit: cover;
-	border-radius: 12px;
 	animation: cat-partial-pulse 1.4s ease-in-out infinite;
 }
 
@@ -670,6 +668,37 @@ button.primary.danger-button:hover {
 	align-items: center;
 	gap: 0.5rem;
 	cursor: pointer;
+}
+
+.shortcut-list {
+	list-style: none;
+	padding: 0;
+	margin: 0.5rem 0 0.75rem 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+	font-size: 0.9rem;
+}
+
+.shortcut-list li {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+}
+
+.shortcut-list kbd {
+	font-family: "SFMono-Regular", "Menlo", monospace;
+	font-size: 0.78rem;
+	background: var(--surface);
+	border: 1px solid var(--ring);
+	border-radius: 6px;
+	padding: 0.1rem 0.45rem;
+	color: var(--ink);
+	box-shadow: inset 0 -1px 0 rgba(53, 30, 12, 0.08);
+}
+
+.shortcut-list span {
+	margin-left: 0.5rem;
 }
 
 .number-row {

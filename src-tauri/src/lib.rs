@@ -1,4 +1,5 @@
 mod activity;
+mod cat_bases;
 mod cat_state;
 mod demo_trigger;
 mod image_cache;
@@ -42,6 +43,7 @@ pub fn run() {
             openai::generate_interruption_task,
             openai::generate_cat_portrait,
             openai::regen_cat_portrait,
+            openai::seed_initial_portrait,
             openai::read_portrait_bytes,
             activity::request_interruption,
             activity::current_foreground,

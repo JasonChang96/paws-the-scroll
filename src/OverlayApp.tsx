@@ -389,27 +389,32 @@ function CompanionView({
 	portraitDataUrl: string | null;
 	cat: Cat | null;
 }) {
+	// `data-tauri-drag-region` doesn't fire on focusable(false) NSPanels —
+	// the panel never receives the mouse events Tauri listens for. We
+	// trigger startDragging() ourselves on left-button mousedown.
+	const startDrag = (event: React.MouseEvent) => {
+		if (event.button !== 0) return;
+		void getCurrentWindow().startDragging();
+	};
 	return (
-		<div
+		<button
+			type="button"
 			className="companion"
 			title={cat?.name ?? "cat"}
-			// Tauri's drag-region attribute: any mousedown on this element
-			// drags the panel. Only on the small companion view; we don't
-			// want the fullscreen interruption screen to be draggable.
-			data-tauri-drag-region
+			onMouseDown={startDrag}
 		>
-			<div className="companion-frame" data-tauri-drag-region>
+			<div className="companion-frame">
 				{portraitDataUrl ? (
 					<img
 						src={portraitDataUrl}
 						alt={cat?.name ?? "cat"}
-						data-tauri-drag-region
+						draggable={false}
 					/>
 				) : (
-					<div className="companion-placeholder" data-tauri-drag-region />
+					<div className="companion-placeholder" />
 				)}
 			</div>
-		</div>
+		</button>
 	);
 }
 
@@ -498,25 +503,27 @@ function TaskCard({
 				>
 					{locked ? `Hold on… ${Math.ceil(remainingMs / 1000)}s` : "I did it."}
 				</button>
+				<div className="task-card-actions-secondary">
+					<button
+						type="button"
+						className="ghost"
+						onClick={onReroll}
+						disabled={locked}
+					>
+						Reroll{rerollIndex >= 4 ? " (easy mode)" : ""}
+					</button>
+					<button
+						type="button"
+						className="ghost"
+						onClick={onDismiss}
+						disabled={locked}
+					>
+						Not right now
+					</button>
+				</div>
 				<button
 					type="button"
-					className="ghost"
-					onClick={onReroll}
-					disabled={locked}
-				>
-					Reroll{rerollIndex >= 4 ? " (easy mode)" : ""}
-				</button>
-				<button
-					type="button"
-					className="ghost"
-					onClick={onDismiss}
-					disabled={locked}
-				>
-					Not right now
-				</button>
-				<button
-					type="button"
-					className="ghost task-card-inaccessible"
+					className="task-card-inaccessible"
 					onClick={onInaccessible}
 					disabled={locked}
 				>

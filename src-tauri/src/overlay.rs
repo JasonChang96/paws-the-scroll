@@ -27,10 +27,12 @@ tauri_nspanel::tauri_panel! {
 
 pub const PRIMARY_OVERLAY_LABEL: &str = "overlay";
 pub const SECONDARY_OVERLAY_PREFIX: &str = "overlay-monitor-";
-/// Roughly the size of a default macOS dock icon (~60px) — small enough to
-/// read as a desktop pet but big enough to be findable.
-pub const COMPANION_WIDTH: f64 = 64.0;
-pub const COMPANION_HEIGHT: f64 = 64.0;
+/// Panel size leaves room around the visible circle for shadow/padding.
+/// The actual cat circle inside the panel is ~64px (matches dock icons),
+/// the extra 16px is padding so the round frame doesn't get clipped at
+/// the panel's square edges.
+pub const COMPANION_WIDTH: f64 = 80.0;
+pub const COMPANION_HEIGHT: f64 = 80.0;
 /// Edge insets from the bottom-right corner. `NSPanel` sits above the dock
 /// visually (`ScreenSaver` level), so we pin tight to the corner instead of
 /// trying to clear the dock height.
@@ -48,6 +50,9 @@ pub const OVERLAY_MODE_EVENT: &str = "overlay-mode-changed";
 
 #[cfg(target_os = "macos")]
 pub fn setup_primary_overlay(app: &AppHandle) -> tauri::Result<()> {
+    log::info!(
+        "[overlay] setup_primary_overlay starting; size={COMPANION_WIDTH}x{COMPANION_HEIGHT}"
+    );
     create_overlay_window(
         app,
         PRIMARY_OVERLAY_LABEL,
@@ -55,6 +60,22 @@ pub fn setup_primary_overlay(app: &AppHandle) -> tauri::Result<()> {
         COMPANION_HEIGHT,
     )?;
     position_overlay_bottom_right(app, PRIMARY_OVERLAY_LABEL)?;
+    if let Some(window) = app.get_webview_window(PRIMARY_OVERLAY_LABEL) {
+        match (window.outer_position(), window.outer_size()) {
+            (Ok(pos), Ok(size)) => {
+                log::info!(
+                    "[overlay] companion ready: physical pos=({}, {}) size=({}x{})",
+                    pos.x,
+                    pos.y,
+                    size.width,
+                    size.height
+                );
+            }
+            _ => log::warn!("[overlay] couldn't read final pos/size after positioning"),
+        }
+    } else {
+        log::warn!("[overlay] companion window missing after setup — to_panel probably failed");
+    }
     Ok(())
 }
 
@@ -125,9 +146,11 @@ pub fn create_overlay_window(
 #[cfg(target_os = "macos")]
 fn position_overlay_bottom_right(app: &AppHandle, label: &str) -> tauri::Result<()> {
     let Some(window) = app.get_webview_window(label) else {
+        log::warn!("[overlay] position_overlay_bottom_right: window {label} missing");
         return Ok(());
     };
     let Some(monitor) = window.primary_monitor()? else {
+        log::warn!("[overlay] position_overlay_bottom_right: no primary monitor");
         return Ok(());
     };
     let scale = monitor.scale_factor();
@@ -135,8 +158,6 @@ fn position_overlay_bottom_right(app: &AppHandle, label: &str) -> tauri::Result<
     let monitor_pos = monitor.position();
     let logical_w = (f64::from(monitor_size.width) / scale).round();
     let logical_h = (f64::from(monitor_size.height) / scale).round();
-    // Bottom-right corner, snug against both edges. The NSPanel floats above
-    // the dock so we don't need to leave dock-height clearance.
     let x =
         (f64::from(monitor_pos.x) / scale + logical_w - COMPANION_WIDTH - COMPANION_RIGHT_INSET_PX)
             .round();
@@ -144,7 +165,41 @@ fn position_overlay_bottom_right(app: &AppHandle, label: &str) -> tauri::Result<
         - COMPANION_HEIGHT
         - COMPANION_BOTTOM_INSET_PX)
         .round();
+    log::info!(
+        "[overlay] positioning companion: monitor=({}x{} @scale {scale}) pos=({}, {}) -> logical xy=({x}, {y})",
+        monitor_size.width, monitor_size.height, monitor_pos.x, monitor_pos.y
+    );
     window.set_position(tauri::LogicalPosition::new(x, y))?;
+    Ok(())
+}
+
+/// Tray menu helper: drag the companion back to a known-visible spot. If the
+/// panel got stuck off-screen or the user lost it, this puts it center-screen
+/// at a slightly bigger size so they can find it, then snaps it back.
+#[cfg(target_os = "macos")]
+pub fn find_companion(app: &AppHandle) -> tauri::Result<()> {
+    let Some(window) = app.get_webview_window(PRIMARY_OVERLAY_LABEL) else {
+        log::warn!("[overlay] find_companion: window missing");
+        return Ok(());
+    };
+    let Some(monitor) = window.primary_monitor()? else {
+        return Ok(());
+    };
+    let scale = monitor.scale_factor();
+    let size = monitor.size();
+    let pos = monitor.position();
+    let logical_w = f64::from(size.width) / scale;
+    let logical_h = f64::from(size.height) / scale;
+    let center_x = f64::from(pos.x) / scale + (logical_w - COMPANION_WIDTH) / 2.0;
+    let center_y = f64::from(pos.y) / scale + (logical_h - COMPANION_HEIGHT) / 2.0;
+    log::info!("[overlay] find_companion: snapping to center ({center_x}, {center_y})");
+    window.set_position(tauri::LogicalPosition::new(center_x, center_y))?;
+    let _ = window.show();
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn find_companion(_app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 

@@ -43,6 +43,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "json",
     "rustls",
     "stream",
+    "multipart",
 ] }
 base64 = "0.22.1"
 futures-util = "0.3"

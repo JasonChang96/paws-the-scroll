@@ -72,8 +72,20 @@ export function Settings() {
 			<section>
 				<h2>Demo mode</h2>
 				<p className="muted">
-					Shorten the grace period and interruption window for stage demos.
+					Disables automatic interruptions. The activity scheduler keeps
+					tracking time, but the cat only fires when you trigger it yourself —
+					keyboard shortcuts make demos deterministic and on-cue.
 				</p>
+				<ul className="muted shortcut-list">
+					<li>
+						<kbd>⌘</kbd> <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>P</kbd>
+						<span>Summon the cat (fire interruption now)</span>
+					</li>
+					<li>
+						<kbd>⌘</kbd> <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>E</kbd>
+						<span>Evolve the cat one tier (regen portrait)</span>
+					</li>
+				</ul>
 				<label className="toggle-row">
 					<input
 						type="checkbox"

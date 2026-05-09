@@ -181,6 +181,14 @@ fn tick<R: Runtime>(app: &AppHandle<R>, state: &Mutex<ActivityState>) {
         return;
     }
 
+    // Demo mode: scheduler keeps tracking activity for aggregates and cat
+    // evolution, but never auto-fires interruptions. The cat is summoned
+    // exclusively via global shortcut (Cmd+Ctrl+Opt+P) so the demo timing
+    // is deterministic and on-cue.
+    if settings.demo_mode {
+        return;
+    }
+
     if s.active_streak_seconds < settings.grace_period_seconds {
         return;
     }
