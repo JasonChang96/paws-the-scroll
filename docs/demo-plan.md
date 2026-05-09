@@ -4,7 +4,7 @@
 
 Create a 2-minute recorded hackathon demo that presents Paws The Scroll as a personal, funny, AI-powered behavioral activation companion.
 
-The video should be a direct screen demo with talking-head narration. Avoid b-roll. The centerpiece is the full-screen cat interruption, with enough time to explain what the app is built on and where OpenAI is used.
+The video should be a direct screen demo with talking-head narration. Avoid b-roll. The centerpiece is the full-screen cat interruption, with enough time to show how OpenAI makes the cat feel personal.
 
 ## Core Message
 
@@ -18,18 +18,18 @@ Hackathon judges.
 
 Hackathon dramatic, personal, and funny. The cat should be memorable and a little demanding without sounding shaming.
 
-## What The App Runs On
+## What The User Experiences
 
-Paws The Scroll is a local-first macOS desktop app:
+Paws The Scroll should feel like a pet interrupting a stuck loop, not another productivity app:
 
-- **Tauri v2** provides the desktop shell and lets the app create native macOS overlay windows that sit above fullscreen apps and follow the user across Spaces.
-- **React + TypeScript** renders onboarding, adoption, dashboard, and overlay UI.
-- **Rust** owns activity tracking, foreground-app detection, scheduling, local storage, cat-state updates, and OpenAI calls.
-- **OpenAI Responses API with `gpt-5.5`** generates cat dialogue, tiny behavioral-activation tasks, completion lines, and structured task bundles.
-- **OpenAI Image API with `gpt-image-2`** generates and regenerates cat portraits, streamed with partial images during reveal.
-- **`tauri-plugin-store`** stores user profile, cat state, task events, settings, and generated portrait paths locally.
+- The user tells the app what they are trying to move toward, what they get stuck in, what tasks are off-limits, and what tone they want from the cat.
+- The app gives them a cat with a visible personality and a generated portrait.
+- When the user has been actively stuck on the computer, the cat appears over the screen.
+- The cat asks for one tiny action: stand up, drink water, clear one object, ground, or start one step.
+- If the user completes, rerolls, dismisses, or marks a task inaccessible, the cat learns from that.
+- Over time, the cat's mood, demeanor, independence, and appearance become more specific to the user.
 
-The user's OpenAI key stays in the local app store. The frontend never directly calls OpenAI; Rust does.
+The technical base is still visible if judges ask: Tauri powers the macOS desktop app and overlay, React renders the interface, Rust handles activity tracking and app state, `gpt-5.5` generates structured dialogue/tasks, and `gpt-image-2` generates cat portraits.
 
 ## Where AI Appears In The Demo
 
@@ -43,7 +43,7 @@ Use `gpt-5.5` for language and decision output:
 - task category, difficulty, estimated seconds, and safety flags
 - completion reaction
 
-The model receives a compact local context packet: goals, stuck patterns, mobility, environment, boundaries, cat state, recent rerolls, recent task outcomes, foreground-app category, and time of day. It returns a strict structured task bundle that the app validates before showing.
+The model receives a compact context packet: goals, stuck patterns, mobility, environment, boundaries, cat state, recent rerolls, recent task outcomes, foreground-app category, and time of day. It returns a strict structured task bundle that the app validates before showing.
 
 ### `gpt-image-2`
 
@@ -59,11 +59,11 @@ For the recording, show at least one visible portrait generation or regenerated 
 ## Demo Arc
 
 1. Personal hook: my cat changed my mental health by interrupting paralysis with care instead of shame.
-2. Base app explanation: this app uses Tauri for native macOS overlays, React for the UI, Rust for activity tracking/local state/OpenAI calls, and local storage by default.
-3. Onboarding/adoption glimpse: show that the user gives goals, boundaries, mobility, environment, tone, and an OpenAI key; then the app generates cat options with `gpt-image-2`.
+2. User setup: show that the user gives goals, boundaries, mobility, environment, and tone so the cat knows what kinds of help fit.
+3. Adoption glimpse: show the user choosing a cat generated with `gpt-image-2`.
 4. Problem setup: show a normal stuck-at-computer state with tabs, notes, or an avoided task.
 5. Product moment: trigger the full-screen cat interruption with `Cmd + Ctrl + Opt + P`.
-6. `gpt-5.5` moment: explain that the cat line and tiny task are generated from a structured local context packet.
+6. `gpt-5.5` moment: explain that the cat line and tiny task are generated from a structured context packet.
 7. Payoff: click `I did it`; the cat reacts, needs update, and the app can reward time away.
 8. Cat evolution: explain that task history and time away change mood, independence, skills, demeanor, and future portraits.
 9. Closing line: the app does not ask the user to become disciplined; it gives them a cat needy enough to make one tiny action possible.
@@ -78,17 +78,15 @@ Not because she fixed anything for me. Because when I was frozen, she interrupte
 
 When I am stuck in paralysis, I do not need another dashboard telling me I failed. I need something small, immediate, and hard to ignore, but not shameful.
 
-So I built Paws The Scroll: a local-first macOS desktop cat that interrupts device paralysis.
+So I built Paws The Scroll: a macOS desktop cat that interrupts device paralysis.
 
-The app uses Tauri for the native macOS shell and overlay behavior, React and TypeScript for the interface, and Rust for the parts that need to be close to the system: activity tracking, foreground-app detection, scheduling, local storage, cat state, and the OpenAI client.
-
-On first launch, I tell the app what I am trying to move toward, what I tend to get stuck in, what my body can handle, where I usually am, and what tasks are off-limits. The OpenAI key is stored locally, and all OpenAI calls go through Rust.
+On first launch, I tell the app what I am trying to move toward, what I tend to get stuck in, what my body can handle, where I usually am, and what tasks are off-limits.
 
 This is also where the first big AI moment happens: `gpt-image-2` generates the cat portraits. The cat starts as a broad personality, but over time its mood, appearance, and demeanor become more specific to me.
 
 Now imagine I am frozen at my laptop. I have been actively using the computer too long, and I am not really choosing the next thing anymore.
 
-Paws The Scroll tracks active use locally. For the demo, I am using the built-in trigger, `Cmd + Ctrl + Opt + P`, which summons the same full-screen interruption without waiting for the scheduler.
+Paws The Scroll watches for active computer use. For the demo, I am using the built-in trigger, `Cmd + Ctrl + Opt + P`, which summons the same full-screen interruption without waiting for the scheduler.
 
 Here, `gpt-5.5` is generating the cat's line and the task. But it is not just writing random wellness advice. It gets a compact context packet: my goals, stuck patterns, mobility, environment, boundaries, the cat's current state, recent rerolls, and what kinds of tasks I actually complete.
 
@@ -109,13 +107,13 @@ It does not try to make me a more optimized person. It gives me a cat that can r
 ## Recording Beats
 
 1. Start on talking head: "The biggest change in my mental health did not start with a productivity system. It started with a cat."
-2. Show the app launch or main window and briefly say it uses Tauri for native macOS overlays, React for UI, and Rust for tracking/storage/OpenAI calls.
-3. Show onboarding/profile fields quickly: goals, stuck patterns, mobility, environment, boundaries, tone, and OpenAI key.
+2. Show onboarding/profile fields quickly: goals, stuck patterns, mobility, environment, boundaries, and tone.
+3. Briefly mention the technical base only as needed: Tauri overlay, React UI, Rust activity tracking, `gpt-5.5`, and `gpt-image-2`.
 4. Show cat adoption or portrait generation with `gpt-image-2`.
 5. Show a normal stuck-at-computer setup: browser, notes, cluttered tabs, or an avoided task.
 6. Trigger the demo interruption with `Cmd + Ctrl + Opt + P`.
 7. Show the full-screen cat overlay above the desktop.
-8. Call out `gpt-5.5`: generated cat line, task, category, difficulty, and safety flags from local context.
+8. Call out `gpt-5.5`: generated cat line, task, category, difficulty, and safety flags from user context.
 9. Click `I did it`.
 10. Show the cat reaction in the small bottom-right overlay using `gpt-image-2`, the needs update, or the dashboard for only a few seconds.
 11. Mention that time away and task history change cat mood, independence, skills, demeanor, and future portraits.
@@ -132,7 +130,7 @@ It does not try to make me a more optimized person. It gives me a cat that can r
 
 ## AI Personalization Talking Point
 
-The AI is not just generating random wellness prompts. `gpt-5.5` receives a compact local context packet: my goals, stuck patterns, mobility, environment, boundaries, cat state, recent rerolls, foreground-app category, time of day, and what kinds of tasks I actually complete. Then it generates one tiny task in a strict schema, and the app validates it before showing it.
+The AI is not just generating random wellness prompts. `gpt-5.5` receives a compact context packet: my goals, stuck patterns, mobility, environment, boundaries, cat state, recent rerolls, foreground-app category, time of day, and what kinds of tasks I actually complete. Then it generates one tiny task in a strict schema, and the app validates it before showing it.
 
 `gpt-image-2` handles the visual side: initial cat portraits and later portrait regeneration as the cat's mood, independence, and skills evolve.
 
