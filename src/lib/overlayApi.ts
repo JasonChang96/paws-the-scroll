@@ -13,6 +13,12 @@ export interface InterruptionPayload {
 	active_app: ForegroundApp | null;
 	active_app_category: AppCategory;
 	time_of_day_label: TimeOfDay;
+	active_streak_seconds: number;
+	today_active_seconds: number;
+	today_social_seconds: number;
+	today_interruptions: number;
+	today_completed: number;
+	today_dismissed: number;
 }
 
 export type { OverlayMode };

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Paws The Scroll uses Accessibility access to read your active window title and browser URL so the cat can tailor its tiny tasks to what you're actually doing. Nothing is sent to the cloud beyond the active app context — no keystrokes, no document contents.</string>
+</dict>
+</plist>

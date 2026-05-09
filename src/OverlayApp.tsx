@@ -137,6 +137,8 @@ function OverlayApp() {
 					cat_hidden_traits: cat.hidden_traits,
 					current_active_app: payload.active_app?.display_name ?? null,
 					current_active_app_category: payload.active_app_category,
+					current_window_title: payload.active_app?.window_title ?? null,
+					current_browser_url: payload.active_app?.browser_url ?? null,
 					time_of_day_label: payload.time_of_day_label,
 					reroll_index: rerollIndex,
 					recent_completed_categories: completedCategoriesRef.current,
@@ -148,6 +150,12 @@ function OverlayApp() {
 					mobility_notes: profile.mobility_notes ?? "",
 					environment_notes: profile.environment_notes ?? "",
 					task_boundaries_notes: profile.task_boundaries_notes ?? "",
+					active_streak_seconds: payload.active_streak_seconds,
+					today_active_seconds: payload.today_active_seconds,
+					today_social_seconds: payload.today_social_seconds,
+					today_interruptions: payload.today_interruptions,
+					today_completed: payload.today_completed,
+					today_dismissed: payload.today_dismissed,
 				});
 				const ready: TaskReadyPayload = {
 					rerollIndex,

@@ -61,7 +61,7 @@ It turns paralysis into one tiny act of care.
 6. Show a funny generated cat line and a tiny task.
 7. Mention OpenAI while showing the generated portrait and task.
 8. Click `I did it`.
-9. Show the cat reaction, needs update, or dashboard for only a few seconds.
+9. Show the cat reaction in the small overlay in the bottom right by generating with gpt iamge 2, needs update, or dashboard for only a few seconds.
 10. End on the app or talking head with the punchline.
 
 ## Demo Build Priorities

@@ -12,6 +12,8 @@
 
 #![allow(dead_code)]
 
+#[cfg(target_os = "macos")]
+mod accessibility;
 mod classifier;
 mod foreground;
 mod idle;
@@ -59,6 +61,19 @@ pub struct InterruptionPayload {
     pub active_app: Option<ForegroundApp>,
     pub active_app_category: AppCategory,
     pub time_of_day_label: TimeOfDay,
+    /// How long the user has been continuously active (no idle gap >
+    /// `idle_threshold_seconds`) leading up to this interruption. 0 for
+    /// manual triggers since the user just chose to summon the cat.
+    pub active_streak_seconds: u32,
+    /// Today's running totals from the local aggregate. The cat uses
+    /// these to say things like "you've been at this for two hours" or
+    /// "this is your fourth interruption today" without us doing the
+    /// math in the prompt.
+    pub today_active_seconds: u32,
+    pub today_social_seconds: u32,
+    pub today_interruptions: u32,
+    pub today_completed: u32,
+    pub today_dismissed: u32,
 }
 
 #[derive(Debug)]
@@ -117,6 +132,10 @@ pub fn start_watcher<R: Runtime>(app: AppHandle<R>) {
     });
 }
 
+// Single coherent tick of activity state — splitting it into helpers would
+// just spread the mutex lock, aggregate update, and decision logic across
+// files without making the flow easier to read.
+#[allow(clippy::too_many_lines)]
 fn tick<R: Runtime>(app: &AppHandle<R>, state: &Mutex<ActivityState>) {
     let settings = match store::read_settings(app) {
         Ok(s) => s,
@@ -203,20 +222,49 @@ fn tick<R: Runtime>(app: &AppHandle<R>, state: &Mutex<ActivityState>) {
         return;
     }
 
+    let aggregate_after = store::upsert_aggregate(app, |a| {
+        a.interruptions += 1;
+    })
+    .ok();
+    let task_events = store::read_task_events(app).unwrap_or_default();
+    let today = chrono::Utc::now().date_naive();
+    let today_completed = u32::try_from(
+        task_events
+            .iter()
+            .filter(|e| e.completed && e.created_at.date_naive() == today)
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    let today_dismissed = u32::try_from(
+        task_events
+            .iter()
+            .filter(|e| {
+                (e.dismissed || e.marked_inaccessible) && e.created_at.date_naive() == today
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+
     let payload = InterruptionPayload {
         source: InterruptionSource::Scheduler,
         active_app: foreground.clone(),
         active_app_category: category,
         time_of_day_label: current_time_of_day(),
+        active_streak_seconds: s.active_streak_seconds,
+        today_active_seconds: aggregate_after.as_ref().map_or(0, |a| a.active_seconds),
+        today_social_seconds: aggregate_after.as_ref().map_or(0, |a| a.social_seconds),
+        today_interruptions: aggregate_after.as_ref().map_or(0, |a| a.interruptions),
+        today_completed,
+        today_dismissed,
     };
-    log::info!("[activity] firing interruption: app={foreground:?} category={category:?}");
+    log::info!(
+        "[activity] firing interruption: app={foreground:?} category={category:?} streak={}s",
+        s.active_streak_seconds
+    );
     if let Err(error) = app.emit(INTERRUPTION_REQUESTED_EVENT, payload.clone()) {
         log::warn!("[activity] failed to emit interruption event: {error}");
         return;
     }
-    let _ = store::upsert_aggregate(app, |a| {
-        a.interruptions += 1;
-    });
     s.last_interruption_at = Some(Instant::now());
     s.next_interruption_due_in_seconds = random_window_seconds(
         settings.interruption_window_min_seconds,
@@ -233,23 +281,66 @@ pub fn request_interruption<R: Runtime>(app: AppHandle<R>) -> Result<(), String>
     let category = foreground.as_ref().map_or(AppCategory::Other, |fg| {
         classifier::classify(fg, &settings.social_apps_extra)
     });
+    let aggregate_after = store::upsert_aggregate(&app, |a| {
+        a.interruptions += 1;
+    })
+    .ok();
+    let task_events = store::read_task_events(&app).unwrap_or_default();
+    let today = chrono::Utc::now().date_naive();
+    let today_completed = u32::try_from(
+        task_events
+            .iter()
+            .filter(|e| e.completed && e.created_at.date_naive() == today)
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    let today_dismissed = u32::try_from(
+        task_events
+            .iter()
+            .filter(|e| {
+                (e.dismissed || e.marked_inaccessible) && e.created_at.date_naive() == today
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+
     let payload = InterruptionPayload {
         source: InterruptionSource::DemoTrigger,
         active_app: foreground,
         active_app_category: category,
         time_of_day_label: current_time_of_day(),
+        // Manual triggers don't carry a meaningful active streak — the user
+        // chose to summon the cat regardless of how long they'd been at it.
+        active_streak_seconds: 0,
+        today_active_seconds: aggregate_after.as_ref().map_or(0, |a| a.active_seconds),
+        today_social_seconds: aggregate_after.as_ref().map_or(0, |a| a.social_seconds),
+        today_interruptions: aggregate_after.as_ref().map_or(0, |a| a.interruptions),
+        today_completed,
+        today_dismissed,
     };
     app.emit(INTERRUPTION_REQUESTED_EVENT, payload)
         .map_err(|e| e.to_string())?;
-    let _ = store::upsert_aggregate(&app, |a| {
-        a.interruptions += 1;
-    });
     Ok(())
 }
 
 #[tauri::command]
 pub fn current_foreground<R: Runtime>(_app: AppHandle<R>) -> Option<ForegroundApp> {
     foreground::current_foreground_app()
+}
+
+/// Whether the app has been granted macOS Accessibility access. Without
+/// this, window titles and browser URLs won't be readable; the bundle-id +
+/// app-name signals still work.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn accessibility_trusted() -> bool {
+    accessibility::is_trusted()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn accessibility_trusted() -> bool {
+    true
 }
 
 const TIME_AWAY_TIERS_SECONDS: [(u32, &str); 3] = [

@@ -188,6 +188,11 @@ export interface ForegroundApp {
 	bundle_id: string | null;
 	display_name: string | null;
 	process_id: number | null;
+	/// Window title from macOS Accessibility API. Null when access not
+	/// granted or the app doesn't expose AXTitle.
+	window_title: string | null;
+	/// Active tab/document URL for browsers (AXDocument). Same null semantics.
+	browser_url: string | null;
 }
 
 export interface GeneratedTaskBundle {

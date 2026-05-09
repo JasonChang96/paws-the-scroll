@@ -46,11 +46,27 @@ pub struct TaskContext {
     pub cat_hidden_traits: Vec<String>,
     pub current_active_app: Option<String>,
     pub current_active_app_category: Option<String>,
+    pub current_window_title: Option<String>,
+    pub current_browser_url: Option<String>,
     pub time_of_day_label: Option<String>,
     pub reroll_index: u8,
     pub recent_completed_categories: Vec<String>,
     pub recent_dismissed_categories: Vec<String>,
     pub want_fallback: bool,
+    /// Activity-tracker signals from `InterruptionPayload`. Default 0 so old
+    /// callers/payloads keep deserializing.
+    #[serde(default)]
+    pub active_streak_seconds: u32,
+    #[serde(default)]
+    pub today_active_seconds: u32,
+    #[serde(default)]
+    pub today_social_seconds: u32,
+    #[serde(default)]
+    pub today_interruptions: u32,
+    #[serde(default)]
+    pub today_completed: u32,
+    #[serde(default)]
+    pub today_dismissed: u32,
     /// Free-form notes the user wrote in their own words during onboarding.
     /// Empty strings are skipped when building the prompt.
     #[serde(default)]
@@ -122,6 +138,24 @@ fn require_key<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
             anyhow!("OpenAI API key not configured — open Settings to add one before continuing")
         })?;
     Ok(key)
+}
+
+/// "1h 23m" / "47m" / "30s" — short, scannable strings the model can quote
+/// directly without doing arithmetic itself.
+fn humanize_seconds(seconds: u32) -> String {
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    if hours > 0 {
+        if minutes > 0 {
+            format!("{hours}h {minutes}m")
+        } else {
+            format!("{hours}h")
+        }
+    } else if minutes > 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn task_response_schema() -> serde_json::Value {
@@ -278,8 +312,38 @@ fn task_user_prompt(ctx: &TaskContext) -> String {
     if let Some(cat) = &ctx.current_active_app_category {
         lines.push(format!("Active app category: {cat}"));
     }
+    if let Some(title) = &ctx.current_window_title {
+        lines.push(format!("Focused window title: {title}"));
+    }
+    if let Some(url) = &ctx.current_browser_url {
+        lines.push(format!("Browser URL: {url}"));
+    }
     if let Some(t) = &ctx.time_of_day_label {
         lines.push(format!("Time of day: {t}"));
+    }
+    if ctx.active_streak_seconds > 0 {
+        lines.push(format!(
+            "Continuous active streak: {}",
+            humanize_seconds(ctx.active_streak_seconds)
+        ));
+    }
+    if ctx.today_active_seconds > 0 {
+        lines.push(format!(
+            "Today's active time so far: {}",
+            humanize_seconds(ctx.today_active_seconds)
+        ));
+    }
+    if ctx.today_social_seconds > 0 {
+        lines.push(format!(
+            "Today's social-app time: {}",
+            humanize_seconds(ctx.today_social_seconds)
+        ));
+    }
+    if ctx.today_interruptions > 0 {
+        lines.push(format!(
+            "Interruption count today (including this one): {} (completed {}, skipped {})",
+            ctx.today_interruptions, ctx.today_completed, ctx.today_dismissed
+        ));
     }
     if !ctx.recent_completed_categories.is_empty() {
         lines.push(format!(

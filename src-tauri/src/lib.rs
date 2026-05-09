@@ -47,6 +47,7 @@ pub fn run() {
             openai::read_portrait_bytes,
             activity::request_interruption,
             activity::current_foreground,
+            activity::accessibility_trusted,
             overlay::enter_interruption_mode,
             overlay::exit_interruption_mode,
             task_outcome::apply_task_outcome,

@@ -59,6 +59,8 @@ export interface InterruptionTaskContext {
 	cat_hidden_traits: string[];
 	current_active_app: string | null;
 	current_active_app_category: AppCategory | null;
+	current_window_title: string | null;
+	current_browser_url: string | null;
 	time_of_day_label: TimeOfDay | null;
 	reroll_index: number;
 	recent_completed_categories: string[];
@@ -70,6 +72,12 @@ export interface InterruptionTaskContext {
 	mobility_notes: string;
 	environment_notes: string;
 	task_boundaries_notes: string;
+	active_streak_seconds: number;
+	today_active_seconds: number;
+	today_social_seconds: number;
+	today_interruptions: number;
+	today_completed: number;
+	today_dismissed: number;
 }
 
 export const generateInterruptionTask = (
