@@ -39,6 +39,7 @@ pub fn run() {
             store::list_aggregates,
             openai::generate_interruption_task,
             openai::generate_cat_portrait,
+            openai::regen_cat_portrait,
             openai::read_portrait_bytes,
             activity::request_interruption,
             activity::current_foreground,

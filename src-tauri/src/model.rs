@@ -92,6 +92,35 @@ pub enum TaskCategory {
     TaskInit,
 }
 
+/// Bucketed independence level. 4 tiers map cleanly to the visual evolution
+/// stops in the portrait prompt; using an enum here lets every downstream
+/// `match` be exhaustive instead of trusting a `u8` to stay in [0, 3].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndependenceTier {
+    #[default]
+    Tier0,
+    Tier1,
+    Tier2,
+    Tier3,
+}
+
+impl IndependenceTier {
+    /// The single source of truth for level→tier bucketing. Anyone needing a
+    /// tier (cache key, prompt slot, UI badge) goes through this.
+    pub fn from_level(level: f32) -> Self {
+        if level >= 0.75 {
+            IndependenceTier::Tier3
+        } else if level >= 0.5 {
+            IndependenceTier::Tier2
+        } else if level >= 0.25 {
+            IndependenceTier::Tier1
+        } else {
+            IndependenceTier::Tier0
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatMood {

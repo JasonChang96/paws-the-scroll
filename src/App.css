@@ -302,6 +302,81 @@ input:focus {
 	border-radius: 16px;
 }
 
+.error-modal-backdrop {
+	position: fixed;
+	inset: 0;
+	display: grid;
+	place-items: center;
+	background: rgba(42, 31, 26, 0.55);
+	backdrop-filter: blur(6px);
+	-webkit-backdrop-filter: blur(6px);
+	border: 0;
+	cursor: pointer;
+	padding: 1.5rem;
+	z-index: 1000;
+	animation: error-modal-fade-in 0.2s ease-out;
+}
+
+@keyframes error-modal-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+.error-modal-card {
+	cursor: default;
+	background: var(--surface);
+	border-radius: 24px;
+	padding: 2rem;
+	max-width: 460px;
+	width: 100%;
+	box-shadow: 0 18px 42px rgba(53, 30, 12, 0.32);
+	display: flex;
+	flex-direction: column;
+	gap: 0.85rem;
+	text-align: center;
+	animation: error-modal-pop 0.3s cubic-bezier(0.2, 0.8, 0.2, 1.05);
+}
+
+@keyframes error-modal-pop {
+	from {
+		transform: translateY(8px) scale(0.96);
+		opacity: 0;
+	}
+	to {
+		transform: translateY(0) scale(1);
+		opacity: 1;
+	}
+}
+
+.error-modal-icon {
+	font-size: 2.4rem;
+	line-height: 1;
+}
+
+.error-modal-title {
+	font-family: "Fraunces", "Cambria", "Georgia", serif;
+	font-size: 1.4rem;
+	margin: 0;
+}
+
+.error-modal-message {
+	color: var(--muted);
+	margin: 0;
+	font-size: 0.95rem;
+	line-height: 1.5;
+	word-break: break-word;
+}
+
+.error-modal-dismiss {
+	margin-top: 0.5rem;
+	align-self: center;
+	min-width: 120px;
+}
+
 .cat-card-emoji {
 	font-size: 96px;
 	line-height: 1;

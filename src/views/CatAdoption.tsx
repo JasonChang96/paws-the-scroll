@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ErrorModal } from "../components/ErrorModal";
 import { generateCatPortrait, readPortraitBytes, saveCat } from "../lib/api";
 import type { Cat, CatType } from "../lib/types";
 import { newId } from "../lib/util";
@@ -68,16 +69,22 @@ export function CatAdoption() {
 		cat: Cat;
 	} | null>(null);
 
-	// Stream partial frames from the streaming gpt-image-2 call. We keep the
-	// most recent partial in state and render it inside the loading card so
-	// the user sees the cat resolve into focus on stage.
+	// Stream partial frames from the streaming gpt-image-2 call. Listener
+	// registers ONCE on mount — we read the current pending id from a ref so
+	// remounting on every adopt() doesn't race against the first SSE event.
+	const pendingCatIdRef = useRef<string | null>(null);
+	useEffect(() => {
+		pendingCatIdRef.current = pendingCatId;
+	}, [pendingCatId]);
+
 	useEffect(() => {
 		let unlisten: (() => void) | undefined;
 		(async () => {
 			unlisten = await listen<PortraitProgress>(
 				"cat-portrait-progress",
 				(event) => {
-					if (pendingCatId !== null && event.payload.cat_id !== pendingCatId) {
+					const current = pendingCatIdRef.current;
+					if (current !== null && event.payload.cat_id !== current) {
 						return;
 					}
 					setPartialDataUrl(event.payload.data_url);
@@ -85,7 +92,7 @@ export function CatAdoption() {
 			);
 		})();
 		return () => unlisten?.();
-	}, [pendingCatId]);
+	}, []);
 
 	const adopt = async (choice: CatChoice) => {
 		setPending(choice.type);
@@ -98,7 +105,7 @@ export function CatAdoption() {
 				cat_id: catId,
 				cat_type: choice.type,
 				mood: "content",
-				independence_tier: 0,
+				independence_tier: "tier0",
 				accessory_set_hash: "v1",
 				skills: [],
 			});
@@ -200,7 +207,11 @@ export function CatAdoption() {
 					</button>
 				))}
 			</div>
-			{error ? <p className="error">{error}</p> : null}
+			<ErrorModal
+				message={error}
+				onDismiss={() => setError(null)}
+				title="The cat couldn't quite arrive."
+			/>
 		</div>
 	);
 }

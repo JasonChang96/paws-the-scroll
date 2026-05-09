@@ -7,8 +7,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{de::DeserializeOwned, Serialize};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Emitter, Runtime};
 use tauri_plugin_store::{Store, StoreExt};
+
+pub const CAT_UPDATED_EVENT: &str = "cat-updated";
 
 use crate::model::{ActivityAggregate, Cat, Settings, TaskEvent, UserProfile};
 
@@ -59,7 +61,11 @@ pub fn read_cat<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Cat>> {
 }
 
 pub fn write_cat<R: Runtime>(app: &AppHandle<R>, cat: &Cat) -> Result<()> {
-    write_typed(app, KEY_CAT, cat)
+    write_typed(app, KEY_CAT, cat)?;
+    if let Err(error) = app.emit(CAT_UPDATED_EVENT, cat) {
+        log::warn!("[store] failed to emit cat-updated: {error}");
+    }
+    Ok(())
 }
 
 pub fn read_settings<R: Runtime>(app: &AppHandle<R>) -> Result<Settings> {

@@ -19,7 +19,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use crate::model::{Cat, CatMood, CatNeeds, StoryEvent, TaskCategory, TaskEvent};
+use crate::model::{Cat, CatMood, CatNeeds, IndependenceTier, StoryEvent, TaskCategory, TaskEvent};
 
 /// Skill IDs the cat can unlock. String literals so we serialize stably and
 /// the prompt builder + autonomous-decay tick can pattern-match exhaustively.
@@ -131,7 +131,7 @@ pub fn apply_task_outcome(
 
     cat.mood = derive_mood(cat, outcome);
 
-    let streak_days = consecutive_completion_days(history);
+    let streak_days = distinct_completion_days(history);
     let unlocked_skills = unlock_skills_from_streak(cat, streak_days);
 
     let current_signature = portrait_signature(cat);
@@ -209,10 +209,10 @@ fn push_story(cat: &mut Cat, text: &str) {
     }
 }
 
-/// Count distinct UTC days with at least one completed task. We don't
-/// require strict consecutiveness — life happens, missing one day shouldn't
-/// reset progress. The cat is forgiving.
-pub fn consecutive_completion_days(history: &[TaskEvent]) -> u32 {
+/// Count distinct UTC days with at least one completed task. Not strictly
+/// consecutive — life happens, missing one day shouldn't reset progress.
+/// The cat is forgiving. Skill thresholds (7/14/30) read this directly.
+pub fn distinct_completion_days(history: &[TaskEvent]) -> u32 {
     let days: BTreeSet<chrono::NaiveDate> = history
         .iter()
         .filter(|e| e.completed)
@@ -322,26 +322,20 @@ pub fn skill_set_hash(skills: &[String]) -> String {
 }
 
 /// Compact signature used to detect whether the cat's *visual* state has
-/// changed (mood + tier + skills) — anything in here flips means the
-/// portrait is stale and should be regenerated.
+/// changed (mood + tier + skills) — any flip means the portrait is stale
+/// and should be regenerated.
 fn portrait_signature(cat: &Cat) -> String {
     let mood = serde_json::to_value(cat.mood)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
-    let tier = independence_tier(cat.independence_level);
+    let tier = IndependenceTier::from_level(cat.independence_level);
+    let tier_label = serde_json::to_value(tier)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
     let skills = skill_set_hash(&cat.skills);
-    format!("{mood}:{tier}:{skills}")
-}
-
-pub fn independence_tier(level: f32) -> u8 {
-    if level >= 0.75 {
-        3
-    } else if level >= 0.5 {
-        2
-    } else {
-        u8::from(level >= 0.25)
-    }
+    format!("{mood}:{tier_label}:{skills}")
 }
 
 /// Wrapper struct for the Tauri command — keeps the call site clean and

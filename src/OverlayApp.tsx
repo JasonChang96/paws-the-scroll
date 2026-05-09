@@ -5,13 +5,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { match } from "ts-pattern";
 import {
 	applyTaskOutcome,
-	generateCatPortrait,
 	generateInterruptionTask,
 	getCat,
 	getUserProfile,
 	type OutcomeEffect,
 	readPortraitBytes,
 	recordTaskEvent,
+	regenCatPortrait,
+	type TaskOutcome,
 } from "./lib/api";
 import {
 	enterInterruption,
@@ -62,20 +63,55 @@ function OverlayApp() {
 		return () => clearInterval(interval);
 	}, []);
 
+	const refreshCat = useCallback(async () => {
+		const c = await getCat();
+		setCat(c);
+		if (c?.portrait_path) {
+			try {
+				const b64 = await readPortraitBytes(c.portrait_path);
+				setPortraitDataUrl(`data:image/png;base64,${b64}`);
+			} catch {
+				setPortraitDataUrl(null);
+			}
+		} else {
+			setPortraitDataUrl(null);
+		}
+	}, []);
+
 	useEffect(() => {
 		(async () => {
-			const [c, p] = await Promise.all([getCat(), getUserProfile()]);
-			setCat(c);
+			const p = await getUserProfile();
 			setProfile(p);
-			if (c?.portrait_path) {
-				try {
-					const b64 = await readPortraitBytes(c.portrait_path);
-					setPortraitDataUrl(`data:image/png;base64,${b64}`);
-				} catch {
-					setPortraitDataUrl(null);
-				}
-			}
+			await refreshCat();
 		})();
+	}, [refreshCat]);
+
+	// Refresh whenever Rust persists a new cat (adoption, task outcome,
+	// time-away rewards). Fires from `store::write_cat`.
+	useEffect(() => {
+		let unlisten: (() => void) | undefined;
+		(async () => {
+			unlisten = await listen("cat-updated", () => {
+				void refreshCat();
+			});
+		})();
+		return () => unlisten?.();
+	}, [refreshCat]);
+
+	// Mirror the streaming partials the CatAdoption picker shows: when
+	// gpt-image-2 streams a fresh portrait, swap the companion's image
+	// frame-by-frame so the cat resolves into focus everywhere it's visible.
+	useEffect(() => {
+		let unlisten: (() => void) | undefined;
+		(async () => {
+			unlisten = await listen<{ data_url: string; is_final: boolean }>(
+				"cat-portrait-progress",
+				(event) => {
+					setPortraitDataUrl(event.payload.data_url);
+				},
+			);
+		})();
+		return () => unlisten?.();
 	}, []);
 
 	const generateAndAnnounce = useCallback(
@@ -165,7 +201,7 @@ function OverlayApp() {
 
 	const finishInterruption = useCallback(
 		async (
-			outcome: "completed" | "dismissed" | "inaccessible",
+			outcome: TaskOutcome,
 			bundle: GeneratedTaskBundle,
 			rerollIndex: number,
 		) => {
@@ -199,25 +235,12 @@ function OverlayApp() {
 			setCat(updatedCat);
 
 			// If the cat's *visual* state changed (mood/tier/skills), kick off
-			// a fresh portrait in the background. We don't await it — the
-			// completion screen and overlay close on schedule, and the new
-			// portrait will be there next time the user looks.
+			// a fresh portrait in the background. Rust owns the level→tier
+			// formula and the cache key — the frontend just says "this cat's
+			// state changed, please regen". We don't await; the new portrait
+			// lands by the next time the user looks at the cat.
 			if (effect.regen_portrait) {
-				generateCatPortrait({
-					cat_id: updatedCat.id,
-					cat_type: updatedCat.type,
-					mood: updatedCat.mood,
-					independence_tier:
-						updatedCat.independence_level >= 0.75
-							? 3
-							: updatedCat.independence_level >= 0.5
-								? 2
-								: updatedCat.independence_level >= 0.25
-									? 1
-									: 0,
-					accessory_set_hash: "v1",
-					skills: updatedCat.skills,
-				}).catch(() => {
+				regenCatPortrait().catch(() => {
 					// Best effort; if it fails we just keep the old portrait.
 				});
 			}

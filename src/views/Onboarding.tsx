@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { useState } from "react";
 import { match } from "ts-pattern";
+import { ErrorModal } from "../components/ErrorModal";
 import { getSettings, saveSettings, saveUserProfile } from "../lib/api";
 import type {
 	CatTone,
@@ -361,7 +362,6 @@ export function Onboarding() {
 					nextLabel={saving ? "Saving…" : "Finish"}
 					nextDisabled={saving}
 				/>
-				{error ? <p className="error">{error}</p> : null}
 			</>
 		))
 		.with("done", () => null)
@@ -370,6 +370,11 @@ export function Onboarding() {
 	return (
 		<div className="onboarding">
 			<div className="onboarding-card">{body}</div>
+			<ErrorModal
+				message={error}
+				onDismiss={() => setError(null)}
+				title="Couldn't save your setup."
+			/>
 		</div>
 	);
 }

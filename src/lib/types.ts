@@ -51,6 +51,12 @@ export type CatMood =
 	| "sleepy"
 	| "affectionate";
 
+/// Bucketed independence level. Mirrors `IndependenceTier` in
+/// src-tauri/src/model.rs — Rust owns the level→tier formula.
+/// Note: serde's snake_case treats digits as part of the prior word, so
+/// `Tier0` serializes as `tier0`, not `tier_0`.
+export type IndependenceTier = "tier0" | "tier1" | "tier2" | "tier3";
+
 export type TaskSource = "ai" | "fallback" | "demo_trigger";
 
 export type AppCategory = "social" | "browser" | "other";

@@ -20,8 +20,8 @@ use tauri::{AppHandle, Emitter, Runtime};
 use crate::cat_state;
 use crate::image_cache;
 use crate::model::{
-    CatMood, CatTone, CatType, Environment, GeneratedTaskBundle, Mobility, StuckPattern,
-    TaskBoundary,
+    CatMood, CatTone, CatType, Environment, GeneratedTaskBundle, IndependenceTier, Mobility,
+    StuckPattern, TaskBoundary,
 };
 use crate::store;
 
@@ -57,7 +57,7 @@ pub struct PortraitRequest {
     pub cat_id: String,
     pub cat_type: CatType,
     pub mood: CatMood,
-    pub independence_tier: u8,
+    pub independence_tier: IndependenceTier,
     pub accessory_set_hash: String,
     /// Skill IDs the cat has earned (e.g. `occasional_self_feeding`). The
     /// prompt builder turns these into visual cues so the cat looks the part.
@@ -552,6 +552,10 @@ async fn call_image_generation_streaming<R: Runtime>(
     let mut stream = resp.bytes_stream();
     let mut buffer = String::new();
     let mut last_b64: Option<String> = None;
+    let mut event_count: u32 = 0;
+    let mut partial_count: u32 = 0;
+
+    log::info!("[openai] image stream started for cat_id={cat_id}");
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("failed to read SSE chunk")?;
@@ -560,12 +564,24 @@ async fn call_image_generation_streaming<R: Runtime>(
         while let Some(boundary) = buffer.find("\n\n") {
             let event_block = buffer[..boundary].to_owned();
             buffer.drain(..boundary + 2);
-            handle_image_sse_event(app, cat_id, &event_block, &mut last_b64);
+            event_count += 1;
+            let emitted = handle_image_sse_event(app, cat_id, &event_block, &mut last_b64);
+            if emitted {
+                partial_count += 1;
+            }
         }
     }
     if !buffer.is_empty() {
-        handle_image_sse_event(app, cat_id, &buffer, &mut last_b64);
+        event_count += 1;
+        let emitted = handle_image_sse_event(app, cat_id, &buffer, &mut last_b64);
+        if emitted {
+            partial_count += 1;
+        }
     }
+
+    log::info!(
+        "[openai] image stream finished for cat_id={cat_id}: events={event_count} partials={partial_count}"
+    );
 
     let final_b64 =
         last_b64.ok_or_else(|| anyhow!("OpenAI image stream ended without any frames"))?;
@@ -587,13 +603,23 @@ async fn call_image_generation_streaming<R: Runtime>(
         .context("failed to base64-decode final streamed image")
 }
 
+/// Returns `true` if at least one b64 frame was extracted and emitted.
 fn handle_image_sse_event<R: Runtime>(
     app: &AppHandle<R>,
     cat_id: &str,
     event_block: &str,
     last_b64: &mut Option<String>,
-) {
+) -> bool {
+    let mut event_type: Option<String> = None;
+    let mut emitted = false;
     for line in event_block.lines() {
+        if let Some(rest) = line
+            .strip_prefix("event: ")
+            .or_else(|| line.strip_prefix("event:"))
+        {
+            event_type = Some(rest.trim().to_owned());
+            continue;
+        }
         let Some(payload) = line
             .strip_prefix("data: ")
             .or_else(|| line.strip_prefix("data:"))
@@ -611,16 +637,31 @@ fn handle_image_sse_event<R: Runtime>(
                 continue;
             }
         };
-        let Some(b64) = json
+        // OpenAI image streaming has shipped two payload shapes in the wild:
+        // the b64 may sit at the top level, under `data` (singular), or under
+        // `data[0]` (array). Try each.
+        let b64_value = json
             .get("b64_json")
             .or_else(|| json.pointer("/data/b64_json"))
-            .and_then(|v| v.as_str())
-        else {
+            .or_else(|| json.pointer("/data/0/b64_json"));
+        let Some(b64) = b64_value.and_then(|v| v.as_str()) else {
+            log::info!(
+                "[openai] SSE event without b64 (event={:?}): {}",
+                event_type,
+                truncate_for_log(payload)
+            );
             continue;
         };
         let partial_index = json
             .get("partial_image_index")
+            .or_else(|| json.pointer("/data/partial_image_index"))
             .and_then(serde_json::Value::as_u64);
+        log::info!(
+            "[openai] streaming partial: event={:?} index={:?} bytes_b64={}",
+            event_type,
+            partial_index,
+            b64.len()
+        );
         let _ = app.emit(
             PORTRAIT_PROGRESS_EVENT,
             PortraitProgress {
@@ -631,6 +672,17 @@ fn handle_image_sse_event<R: Runtime>(
             },
         );
         *last_b64 = Some(b64.to_owned());
+        emitted = true;
+    }
+    emitted
+}
+
+fn truncate_for_log(s: &str) -> String {
+    const MAX: usize = 240;
+    if s.len() <= MAX {
+        s.to_owned()
+    } else {
+        format!("{}…(+{} bytes)", &s[..MAX], s.len() - MAX)
     }
 }
 
@@ -656,10 +708,10 @@ fn portrait_prompt(req: &PortraitRequest) -> String {
         CatMood::Affectionate => "cheek-rubbing, warm, eyes closed in trust",
     };
     let independence = match req.independence_tier {
-        0 => "needy and clingy posture",
-        1 => "balanced posture, looks comfortable",
-        2 => "confident posture, slightly independent",
-        _ => "fully independent, capable, slightly worldly",
+        IndependenceTier::Tier0 => "needy and clingy posture",
+        IndependenceTier::Tier1 => "balanced posture, looks comfortable",
+        IndependenceTier::Tier2 => "confident posture, slightly independent",
+        IndependenceTier::Tier3 => "fully independent, capable, slightly worldly",
     };
     let skill_hints = cat_state::skill_visual_hints(&req.skills);
     let skill_clause = if skill_hints.is_empty() {
@@ -699,13 +751,16 @@ pub async fn generate_portrait<R: Runtime>(
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default();
-    let tier = req.independence_tier.to_string();
+    let tier_label = serde_json::to_value(req.independence_tier)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
     let skills_hash = cat_state::skill_set_hash(&req.skills);
     let key_parts = [
         req.cat_id.as_str(),
         cat_type_label.as_str(),
         mood_label.as_str(),
-        tier.as_str(),
+        tier_label.as_str(),
         req.accessory_set_hash.as_str(),
         skills_hash.as_str(),
     ];
@@ -752,4 +807,32 @@ pub async fn generate_cat_portrait(
 pub async fn read_portrait_bytes(path: String) -> Result<String, String> {
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+/// Regenerate the portrait for the cat's *current* persisted state. The
+/// frontend calls this after `apply_task_outcome` reports `regen_portrait`
+/// so it never has to know the level→tier formula or assemble a
+/// `PortraitRequest` — all derivation lives here, in Rust.
+#[tauri::command]
+pub async fn regen_cat_portrait(app: AppHandle) -> Result<PortraitResponse, String> {
+    let Some(cat) = store::read_cat(&app).map_err(|e| e.to_string())? else {
+        return Err("no cat found — finish onboarding first".into());
+    };
+    let request = PortraitRequest {
+        cat_id: cat.id.clone(),
+        cat_type: cat.cat_type,
+        mood: cat.mood,
+        independence_tier: IndependenceTier::from_level(cat.independence_level),
+        accessory_set_hash: "v1".into(),
+        skills: cat.skills.clone(),
+    };
+    let response = generate_portrait(&app, &request)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Persist the freshly-generated path so the dashboard picks it up next
+    // time it reads cat state.
+    let mut updated = cat;
+    updated.portrait_path = Some(response.path.clone());
+    store::write_cat(&app, &updated).map_err(|e| e.to_string())?;
+    Ok(response)
 }

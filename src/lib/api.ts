@@ -8,6 +8,7 @@ import type {
 	Cat,
 	CatMood,
 	GeneratedTaskBundle,
+	IndependenceTier,
 	Settings,
 	TaskCategory,
 	TaskEvent,
@@ -68,7 +69,7 @@ export interface PortraitRequest {
 	cat_id: string;
 	cat_type: Cat["type"];
 	mood: CatMood;
-	independence_tier: number;
+	independence_tier: IndependenceTier;
 	accessory_set_hash: string;
 	skills: string[];
 }
@@ -110,6 +111,13 @@ export interface PortraitResponse {
 export const generateCatPortrait = (
 	request: PortraitRequest,
 ): Promise<PortraitResponse> => invoke("generate_cat_portrait", { request });
+
+/// Regenerate the portrait for the cat's *current* persisted state. Use this
+/// instead of `generateCatPortrait` when reacting to cat-state evolution —
+/// Rust derives the tier and assembles the request so callers never duplicate
+/// the level→tier formula.
+export const regenCatPortrait = (): Promise<PortraitResponse> =>
+	invoke("regen_cat_portrait");
 
 export const readPortraitBytes = (path: string): Promise<string> =>
 	invoke("read_portrait_bytes", { path });

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ErrorModal } from "../components/ErrorModal";
 import { getSettings, saveSettings } from "../lib/api";
 import type { Settings as SettingsModel } from "../lib/types";
 import { useViewStore } from "../lib/viewStore";
@@ -114,7 +115,11 @@ export function Settings() {
 			<CrisisNote />
 
 			{savedAt ? <p className="muted small">Saved.</p> : null}
-			{error ? <p className="error">{error}</p> : null}
+			<ErrorModal
+				message={error}
+				onDismiss={() => setError(null)}
+				title="Couldn't save settings."
+			/>
 		</div>
 	);
 }
