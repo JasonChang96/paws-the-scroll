@@ -1,5 +1,496 @@
+import { type Event, emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import clsx from "clsx";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { match } from "ts-pattern";
+import {
+	applyTaskOutcome,
+	generateCatPortrait,
+	generateInterruptionTask,
+	getCat,
+	getUserProfile,
+	type OutcomeEffect,
+	readPortraitBytes,
+	recordTaskEvent,
+} from "./lib/api";
+import {
+	enterInterruption,
+	exitInterruption,
+	type InterruptionPayload,
+	onInterruptionRequested,
+} from "./lib/overlayApi";
+import type { Cat, GeneratedTaskBundle, UserProfile } from "./lib/types";
+import { newId, nowIso } from "./lib/util";
+
+type Mode =
+	| { kind: "companion" }
+	| { kind: "loading"; rerollIndex: number; payload: InterruptionPayload }
+	| {
+			kind: "task";
+			rerollIndex: number;
+			bundle: GeneratedTaskBundle;
+			payload: InterruptionPayload;
+			disabledUntil: number;
+	  }
+	| { kind: "completed"; bundle: GeneratedTaskBundle; effect: OutcomeEffect }
+	| { kind: "error"; message: string };
+
+const TASK_READY_EVENT = "paws-task-ready";
+const TASK_RESET_EVENT = "paws-task-reset";
+
+interface TaskReadyPayload {
+	rerollIndex: number;
+	bundle: GeneratedTaskBundle;
+	payload: InterruptionPayload;
+	disabledUntil: number;
+}
+
 function OverlayApp() {
-	return <div className="overlay-root">overlay</div>;
+	const window = getCurrentWindow();
+	const isPrimary = window.label === "overlay";
+	const [cat, setCat] = useState<Cat | null>(null);
+	const [profile, setProfile] = useState<UserProfile | null>(null);
+	const [portraitDataUrl, setPortraitDataUrl] = useState<string | null>(null);
+	const [mode, setMode] = useState<Mode>({ kind: "companion" });
+	const [tick, setTick] = useState(0);
+	const generationLockRef = useRef(false);
+	const completedCategoriesRef = useRef<string[]>([]);
+	const dismissedCategoriesRef = useRef<string[]>([]);
+
+	useEffect(() => {
+		const interval = setInterval(() => setTick((t) => t + 1), 250);
+		return () => clearInterval(interval);
+	}, []);
+
+	useEffect(() => {
+		(async () => {
+			const [c, p] = await Promise.all([getCat(), getUserProfile()]);
+			setCat(c);
+			setProfile(p);
+			if (c?.portrait_path) {
+				try {
+					const b64 = await readPortraitBytes(c.portrait_path);
+					setPortraitDataUrl(`data:image/png;base64,${b64}`);
+				} catch {
+					setPortraitDataUrl(null);
+				}
+			}
+		})();
+	}, []);
+
+	const generateAndAnnounce = useCallback(
+		async (rerollIndex: number, payload: InterruptionPayload) => {
+			if (!cat || !profile || generationLockRef.current) return;
+			generationLockRef.current = true;
+			try {
+				const bundle = await generateInterruptionTask({
+					goals: profile.goals,
+					stuck_patterns: profile.stuck_patterns,
+					mobility: profile.mobility_constraints,
+					environment: profile.environment_constraints,
+					task_boundaries: profile.task_boundaries,
+					cat_type: cat.type,
+					cat_tone: profile.preferred_tone,
+					cat_mood: cat.mood,
+					cat_visible_traits: cat.visible_traits,
+					cat_hidden_traits: cat.hidden_traits,
+					current_active_app: payload.active_app?.display_name ?? null,
+					current_active_app_category: payload.active_app_category,
+					time_of_day_label: payload.time_of_day_label,
+					reroll_index: rerollIndex,
+					recent_completed_categories: completedCategoriesRef.current,
+					recent_dismissed_categories: dismissedCategoriesRef.current,
+					want_fallback: rerollIndex >= 5,
+				});
+				const ready: TaskReadyPayload = {
+					rerollIndex,
+					bundle,
+					payload,
+					disabledUntil: Date.now() + 5_000,
+				};
+				await emit(TASK_READY_EVENT, ready);
+			} catch (e) {
+				const message = e instanceof Error ? e.message : String(e);
+				setMode({ kind: "error", message });
+			} finally {
+				generationLockRef.current = false;
+			}
+		},
+		[cat, profile],
+	);
+
+	useEffect(() => {
+		if (!isPrimary) return;
+		let unlisten: (() => void) | undefined;
+		(async () => {
+			unlisten = await onInterruptionRequested(async (payload) => {
+				await enterInterruption();
+				setMode({ kind: "loading", rerollIndex: 0, payload });
+				await generateAndAnnounce(0, payload);
+			});
+		})();
+		return () => unlisten?.();
+	}, [isPrimary, generateAndAnnounce]);
+
+	useEffect(() => {
+		let unlisten: (() => void) | undefined;
+		(async () => {
+			const off = await listen<TaskReadyPayload>(
+				TASK_READY_EVENT,
+				(event: Event<TaskReadyPayload>) => {
+					setMode({
+						kind: "task",
+						rerollIndex: event.payload.rerollIndex,
+						bundle: event.payload.bundle,
+						payload: event.payload.payload,
+						disabledUntil: event.payload.disabledUntil,
+					});
+				},
+			);
+			unlisten = off;
+		})();
+		return () => unlisten?.();
+	}, []);
+
+	useEffect(() => {
+		let unlisten: (() => void) | undefined;
+		(async () => {
+			const off = await listen(TASK_RESET_EVENT, () => {
+				setMode({ kind: "companion" });
+			});
+			unlisten = off;
+		})();
+		return () => unlisten?.();
+	}, []);
+
+	const finishInterruption = useCallback(
+		async (
+			outcome: "completed" | "dismissed" | "inaccessible",
+			bundle: GeneratedTaskBundle,
+			rerollIndex: number,
+		) => {
+			if (!isPrimary) return;
+			const event = {
+				id: newId("evt"),
+				created_at: nowIso(),
+				source: "ai" as const,
+				category: bundle.task.category,
+				difficulty: bundle.task.difficulty,
+				app_category: null,
+				reroll_index: rerollIndex,
+				completed: outcome === "completed",
+				dismissed: outcome === "dismissed",
+				marked_inaccessible: outcome === "inaccessible",
+			};
+			await recordTaskEvent(event);
+
+			// Hand off to Rust for the actual cat-state evolution. This
+			// applies category-specific need decrements, derives mood from
+			// state, increments the streak counter, and unlocks tier skills
+			// when thresholds cross. We update local state from the response.
+			const { cat: updatedCat, effect } = await applyTaskOutcome(
+				{
+					category: bundle.task.category,
+					outcome,
+					completed_at: event.created_at,
+				},
+				event,
+			);
+			setCat(updatedCat);
+
+			// If the cat's *visual* state changed (mood/tier/skills), kick off
+			// a fresh portrait in the background. We don't await it — the
+			// completion screen and overlay close on schedule, and the new
+			// portrait will be there next time the user looks.
+			if (effect.regen_portrait) {
+				generateCatPortrait({
+					cat_id: updatedCat.id,
+					cat_type: updatedCat.type,
+					mood: updatedCat.mood,
+					independence_tier:
+						updatedCat.independence_level >= 0.75
+							? 3
+							: updatedCat.independence_level >= 0.5
+								? 2
+								: updatedCat.independence_level >= 0.25
+									? 1
+									: 0,
+					accessory_set_hash: "v1",
+					skills: updatedCat.skills,
+				}).catch(() => {
+					// Best effort; if it fails we just keep the old portrait.
+				});
+			}
+
+			if (outcome === "completed") {
+				completedCategoriesRef.current = [
+					bundle.task.category,
+					...completedCategoriesRef.current,
+				].slice(0, 5);
+				setMode({ kind: "completed", bundle, effect });
+				setTimeout(async () => {
+					await emit(TASK_RESET_EVENT);
+					await exitInterruption();
+				}, 2_500);
+			} else {
+				dismissedCategoriesRef.current = [
+					bundle.task.category,
+					...dismissedCategoriesRef.current,
+				].slice(0, 5);
+				await emit(TASK_RESET_EVENT);
+				await exitInterruption();
+			}
+		},
+		[isPrimary],
+	);
+
+	const reroll = useCallback(
+		async (rerollIndex: number, payload: InterruptionPayload) => {
+			if (!isPrimary) return;
+			setMode({ kind: "loading", rerollIndex: rerollIndex + 1, payload });
+			await generateAndAnnounce(rerollIndex + 1, payload);
+		},
+		[isPrimary, generateAndAnnounce],
+	);
+
+	void tick; // re-render every 250ms for the lockout countdown
+
+	return match(mode)
+		.with({ kind: "companion" }, () => (
+			<CompanionView portraitDataUrl={portraitDataUrl} cat={cat} />
+		))
+		.with({ kind: "loading" }, () => (
+			<InterruptionShell>
+				<TaskCardLoading
+					portraitDataUrl={portraitDataUrl}
+					catName={cat?.name ?? "Your cat"}
+				/>
+			</InterruptionShell>
+		))
+		.with({ kind: "task" }, (m) => (
+			<InterruptionShell>
+				<TaskCard
+					bundle={m.bundle}
+					rerollIndex={m.rerollIndex}
+					disabledUntil={m.disabledUntil}
+					portraitDataUrl={portraitDataUrl}
+					catName={cat?.name ?? "Your cat"}
+					onComplete={() =>
+						finishInterruption("completed", m.bundle, m.rerollIndex)
+					}
+					onReroll={() => reroll(m.rerollIndex, m.payload)}
+					onDismiss={() =>
+						finishInterruption("dismissed", m.bundle, m.rerollIndex)
+					}
+					onInaccessible={() =>
+						finishInterruption("inaccessible", m.bundle, m.rerollIndex)
+					}
+				/>
+			</InterruptionShell>
+		))
+		.with({ kind: "completed" }, (m) => (
+			<InterruptionShell>
+				<div className="task-card task-card-completed">
+					<div className="task-card-portrait">
+						{portraitDataUrl ? (
+							<img src={portraitDataUrl} alt={cat?.name ?? ""} />
+						) : null}
+					</div>
+					<p className="task-card-cat-line">{m.bundle.completion_line}</p>
+					{m.effect.unlocked_skills.length > 0 ? (
+						<div className="task-card-skill-unlock">
+							<div className="task-card-skill-unlock-label">
+								New skill unlocked
+							</div>
+							{m.effect.unlocked_skills.map((skillId) => (
+								<div key={skillId} className="task-card-skill-unlock-name">
+									{skillLabel(skillId)}
+								</div>
+							))}
+						</div>
+					) : null}
+					<p className="task-card-completed-hint">
+						{m.effect.streak_days > 0
+							? `Day ${m.effect.streak_days} of caring for ${cat?.name ?? "your cat"}.`
+							: "Maybe stretch a little. The cat is fine for a while."}
+					</p>
+				</div>
+			</InterruptionShell>
+		))
+		.with({ kind: "error" }, (m) => (
+			<InterruptionShell>
+				<div className="task-card">
+					<p className="task-card-cat-line">The cat is having trouble.</p>
+					<p className="task-card-error">{m.message}</p>
+					<div className="task-card-actions">
+						<button
+							type="button"
+							className="ghost"
+							onClick={async () => {
+								await emit(TASK_RESET_EVENT);
+								await exitInterruption();
+							}}
+						>
+							Close
+						</button>
+					</div>
+				</div>
+			</InterruptionShell>
+		))
+		.exhaustive();
+}
+
+function skillLabel(skillId: string): string {
+	switch (skillId) {
+		case "occasional_self_feeding":
+			return "Occasional self-feeding";
+		case "independent_play":
+			return "Independent play";
+		case "self_grooming":
+			return "Self-grooming";
+		default:
+			return skillId.replace(/_/g, " ");
+	}
+}
+
+function CompanionView({
+	portraitDataUrl,
+	cat,
+}: {
+	portraitDataUrl: string | null;
+	cat: Cat | null;
+}) {
+	return (
+		<div className="companion">
+			<div className="companion-frame">
+				{portraitDataUrl ? (
+					<img src={portraitDataUrl} alt={cat?.name ?? "cat"} />
+				) : (
+					<div className="companion-placeholder" />
+				)}
+			</div>
+			{cat ? <div className="companion-name">{cat.name}</div> : null}
+		</div>
+	);
+}
+
+function InterruptionShell({ children }: { children: React.ReactNode }) {
+	return (
+		<div className="interruption-root">
+			<div className="interruption-backdrop" />
+			<div className="interruption-content">{children}</div>
+		</div>
+	);
+}
+
+function TaskCardLoading({
+	portraitDataUrl,
+	catName,
+}: {
+	portraitDataUrl: string | null;
+	catName: string;
+}) {
+	return (
+		<div className="task-card task-card-loading">
+			<div className="task-card-portrait">
+				{portraitDataUrl ? (
+					<img src={portraitDataUrl} alt={catName} />
+				) : (
+					<div className="cat-portrait-placeholder" />
+				)}
+			</div>
+			<p className="task-card-cat-line">
+				{catName} is deciding what they want…
+			</p>
+		</div>
+	);
+}
+
+function TaskCard({
+	bundle,
+	rerollIndex,
+	disabledUntil,
+	portraitDataUrl,
+	catName,
+	onComplete,
+	onReroll,
+	onDismiss,
+	onInaccessible,
+}: {
+	bundle: GeneratedTaskBundle;
+	rerollIndex: number;
+	disabledUntil: number;
+	portraitDataUrl: string | null;
+	catName: string;
+	onComplete: () => void;
+	onReroll: () => void;
+	onDismiss: () => void;
+	onInaccessible: () => void;
+}) {
+	const remainingMs = Math.max(0, disabledUntil - Date.now());
+	const locked = remainingMs > 0;
+	return (
+		<div className="task-card">
+			<div className="task-card-header">
+				<div className="task-card-portrait">
+					{portraitDataUrl ? (
+						<img src={portraitDataUrl} alt={catName} />
+					) : (
+						<div className="cat-portrait-placeholder" />
+					)}
+				</div>
+				<div>
+					<div className="task-card-need">
+						{catName} is feeling {bundle.need.replace(/_/g, " ")}.
+					</div>
+					<p className="task-card-cat-line">{bundle.cat_line}</p>
+				</div>
+			</div>
+
+			<h2 className="task-card-title">{bundle.task.title}</h2>
+			<p className="task-card-instruction">{bundle.task.instruction}</p>
+
+			<div className="task-card-actions">
+				<button
+					type="button"
+					className={clsx("primary task-card-primary", locked && "locked")}
+					onClick={onComplete}
+					disabled={locked}
+				>
+					{locked ? `Hold on… ${Math.ceil(remainingMs / 1000)}s` : "I did it."}
+				</button>
+				<button
+					type="button"
+					className="ghost"
+					onClick={onReroll}
+					disabled={locked}
+				>
+					Reroll{rerollIndex >= 4 ? " (easy mode)" : ""}
+				</button>
+				<button
+					type="button"
+					className="ghost"
+					onClick={onDismiss}
+					disabled={locked}
+				>
+					Not right now
+				</button>
+				<button
+					type="button"
+					className="ghost task-card-inaccessible"
+					onClick={onInaccessible}
+					disabled={locked}
+				>
+					This doesn't work for me
+				</button>
+			</div>
+			{rerollIndex >= 5 ? (
+				<p className="task-card-hint">
+					The cat picked something tiny. No items, no big movements.
+				</p>
+			) : null}
+		</div>
+	);
 }
 
 export default OverlayApp;
