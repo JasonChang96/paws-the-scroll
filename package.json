@@ -1,0 +1,33 @@
+{
+	"name": "paws-the-scroll",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc && vite build",
+		"preview": "vite preview",
+		"tauri": "tauri",
+		"lint": "biome check --write",
+		"typecheck": "tsc --noEmit",
+		"cargo:clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features",
+		"cargo:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml",
+		"cargo": "pnpm run cargo:clippy && pnpm run cargo:fmt",
+		"check": "pnpm run lint && pnpm run typecheck && pnpm run cargo"
+	},
+	"dependencies": {
+		"react": "^18.3.1",
+		"react-dom": "^18.3.1",
+		"@tauri-apps/api": "^2",
+		"@tauri-apps/plugin-opener": "^2"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "latest",
+		"@types/react": "^18.3.1",
+		"@types/react-dom": "^18.3.1",
+		"@vitejs/plugin-react": "^4.3.4",
+		"typescript": "~5.6.2",
+		"vite": "^6.0.3",
+		"@tauri-apps/cli": "^2"
+	}
+}
