@@ -72,6 +72,12 @@ It turns paralysis into one tiny act of care.
 4. Immediate completion payoff after clicking `I did it`.
 5. Minimal dashboard proof if time allows: mood, needs, tiny actions completed, and time-away reward.
 
+## AI Personalization Talking Point
+
+The AI is not just generating random wellness prompts. It receives a compact local context packet: my goals, stuck patterns, mobility, environment, boundaries, cat state, recent rerolls, and what kinds of tasks I actually complete. Then it generates one tiny task in a strict schema, and the app validates it before showing it.
+
+See [Task Personalization](./task-personalization.md) for the longer product plan.
+
 ## Recommended Final Line
 
 Paws The Scroll: the cat that bullies you into caring for yourself, gently.
