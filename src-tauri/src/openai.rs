@@ -12,10 +12,9 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
-use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Runtime};
 
 use crate::cat_bases;
 use crate::cat_state;
@@ -605,28 +604,21 @@ pub async fn generate_task_with_retry<R: Runtime>(
     Err(last_error.unwrap_or_else(|| anyhow!("OpenAI task generation failed without error")))
 }
 
-/// Tauri event payload broadcast on each partial frame from the streaming
-/// image generation. The frontend swaps the placeholder for `data_url` as
-/// each partial lands; the final frame is also written to disk by the
-/// caller and read back via `read_portrait_bytes`.
-pub const PORTRAIT_PROGRESS_EVENT: &str = "cat-portrait-progress";
-
-#[derive(Clone, Debug, Serialize)]
-struct PortraitProgress {
-    cat_id: String,
-    partial_index: Option<u64>,
-    is_final: bool,
-    data_url: String,
+#[derive(Deserialize)]
+struct ImageEditEnvelope {
+    data: Vec<ImageEditEntry>,
 }
 
-/// Streamed image *edit* against a hand-drawn base portrait. Switching from
-/// `images/generations` to `images/edits` lets us anchor the visual style to
-/// `assets/{breed}.png` so we don't have to re-describe the style in every
-/// prompt. Multipart payload because the edits endpoint takes the source
-/// image as a file part. `partial_images: 3` still streams partial frames
-/// over SSE, costing ~300 extra image-output tokens per cat.
-async fn call_image_edit_streaming<R: Runtime>(
-    app: &AppHandle<R>,
+#[derive(Deserialize)]
+struct ImageEditEntry {
+    b64_json: String,
+}
+
+/// Non-streaming image *edit* against a hand-drawn base portrait. We tried
+/// `stream: true, partial_images: 3` per the docs but gpt-image-2 only
+/// emits a single `image_edit.completed` event for our payloads — paying
+/// SSE overhead for nothing. Standard JSON response is faster and simpler.
+async fn call_image_edit(
     cat_id: &str,
     api_key: &str,
     prompt: &str,
@@ -640,8 +632,6 @@ async fn call_image_edit_streaming<R: Runtime>(
         .text("quality", "low")
         .text("background", "opaque")
         .text("output_format", "jpeg")
-        .text("stream", "true")
-        .text("partial_images", "3")
         .text("n", "1")
         .part(
             "image",
@@ -651,262 +641,46 @@ async fn call_image_edit_streaming<R: Runtime>(
                 .context("failed to set image part mime")?,
         );
     log::info!(
-        "[openai] POST /v1/images/edits model={IMAGE_MODEL} cat_id={cat_id} \
-         (multipart, stream=true, partial_images=3, quality=low)"
+        "[openai] POST /v1/images/edits model={IMAGE_MODEL} cat_id={cat_id} (multipart, quality=low, jpeg)"
     );
     let started = std::time::Instant::now();
     let resp = client
         .post(format!("{OPENAI_BASE_URL}/images/edits"))
         .bearer_auth(api_key)
-        .header("Accept", "text/event-stream")
         .multipart(form)
         .send()
         .await
         .context("OpenAI image edit request failed")?;
     let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .context("failed to read OpenAI image edit body")?;
     log::info!(
-        "[openai] /v1/images/edits opened {status} in {}ms — streaming partials…",
-        started.elapsed().as_millis()
+        "[openai] /v1/images/edits {status} in {}ms ({} bytes)",
+        started.elapsed().as_millis(),
+        text.len()
     );
     if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
         bail!("OpenAI images returned {status}: {text}");
     }
 
-    let mut stream = resp.bytes_stream();
-    let mut buffer = String::new();
-    let mut last_b64: Option<String> = None;
-    let mut event_count: u32 = 0;
-    let mut partial_count: u32 = 0;
-
-    log::info!("[openai] image stream started for cat_id={cat_id}");
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("failed to read SSE chunk")?;
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-        while let Some(boundary) = buffer.find("\n\n") {
-            let event_block = buffer[..boundary].to_owned();
-            buffer.drain(..boundary + 2);
-            event_count += 1;
-            let emitted = handle_image_sse_event(app, cat_id, &event_block, &mut last_b64);
-            if emitted {
-                partial_count += 1;
-            }
-        }
-    }
-    if !buffer.is_empty() {
-        event_count += 1;
-        let emitted = handle_image_sse_event(app, cat_id, &buffer, &mut last_b64);
-        if emitted {
-            partial_count += 1;
-        }
-    }
-
-    log::info!(
-        "[openai] image stream finished for cat_id={cat_id}: events={event_count} partials={partial_count}"
-    );
-
-    let final_b64 =
-        last_b64.ok_or_else(|| anyhow!("OpenAI image stream ended without any frames"))?;
-
+    let envelope: ImageEditEnvelope = serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse images/edits envelope: {text}"))?;
+    let entry = envelope
+        .data
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("OpenAI returned no image data"))?;
     let raw_bytes = base64::engine::general_purpose::STANDARD
-        .decode(final_b64.as_bytes())
-        .context("failed to base64-decode final streamed image")?;
+        .decode(entry.b64_json.as_bytes())
+        .context("failed to base64-decode generated image")?;
 
-    // gpt-image-2 doesn't honor `background: "transparent"` and tends to
-    // paint a solid backdrop even when the prompt asks for isolation. Pipe
-    // through `rembg` to actually strip it. If rembg isn't installed the
-    // helper returns the original bytes and we keep the opaque image.
-    let processed = remove_background_via_rembg(&raw_bytes).await;
-
-    // Final emit uses the rembg-processed PNG so the frontend's last
-    // streamed frame matches what we just wrote to disk.
-    let final_data_url = match &processed {
-        Some(png_bytes) => {
-            let b64 = base64::engine::general_purpose::STANDARD.encode(png_bytes);
-            format!("data:image/png;base64,{b64}")
-        }
-        None => format!("data:image/jpeg;base64,{final_b64}"),
-    };
-    let _ = app.emit(
-        PORTRAIT_PROGRESS_EVENT,
-        PortraitProgress {
-            cat_id: cat_id.to_owned(),
-            partial_index: None,
-            is_final: true,
-            data_url: final_data_url,
-        },
-    );
-
-    Ok(processed.unwrap_or(raw_bytes))
-}
-
-/// Pipe the JPEG bytes through `rembg i - -` (stdin → stdout) and return
-/// the PNG-with-alpha output. Tries a few invocations so all common rembg
-/// installs work without requiring the user to activate a venv first:
-///
-///   1. `rembg` — works for global installs (`uv tool install rembg`,
-///      `pipx install rembg[cli]`, `pip install --user`).
-///   2. `uv run rembg` — works for project-local installs (`uv add rembg`
-///      inside this repo). `uv run` walks up from cwd to find the
-///      pyproject.toml + .venv automatically.
-///   3. `./.venv/bin/rembg` and `../.venv/bin/rembg` — direct paths for the
-///      common project-venv layouts when uv isn't on PATH either.
-///
-/// Returns `None` only if every candidate fails; caller falls back to the
-/// original opaque bytes.
-async fn remove_background_via_rembg(jpeg_bytes: &[u8]) -> Option<Vec<u8>> {
-    let candidates: &[(&str, &[&str])] = &[
-        ("rembg", &["i", "-", "-"]),
-        ("uv", &["run", "rembg", "i", "-", "-"]),
-        ("./.venv/bin/rembg", &["i", "-", "-"]),
-        ("../.venv/bin/rembg", &["i", "-", "-"]),
-    ];
-    for (cmd, args) in candidates {
-        match try_rembg_invocation(cmd, args, jpeg_bytes).await {
-            Ok(bytes) => {
-                log::info!(
-                    "[openai] rembg ({cmd}) processed: {} bytes JPEG -> {} bytes PNG",
-                    jpeg_bytes.len(),
-                    bytes.len()
-                );
-                return Some(bytes);
-            }
-            Err(reason) => {
-                log::debug!("[openai] rembg attempt via `{cmd}` failed: {reason}");
-            }
-        }
-    }
-    log::info!(
-        "[openai] rembg unavailable on every candidate path; keeping opaque image. \
-         Install globally with `uv tool install rembg` or run from a shell with the \
-         project venv activated."
-    );
-    None
-}
-
-async fn try_rembg_invocation(
-    cmd: &str,
-    args: &[&str],
-    jpeg_bytes: &[u8],
-) -> Result<Vec<u8>, String> {
-    use tokio::io::AsyncWriteExt;
-    use tokio::process::Command;
-
-    let mut child = Command::new(cmd)
-        .args(args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn: {e}"))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(jpeg_bytes)
-            .await
-            .map_err(|e| format!("stdin write: {e}"))?;
-        drop(stdin);
-    }
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| format!("wait: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "exit {} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    if output.stdout.is_empty() {
-        return Err("empty stdout".into());
-    }
-    Ok(output.stdout)
-}
-
-/// Returns `true` if at least one b64 frame was extracted and emitted.
-fn handle_image_sse_event<R: Runtime>(
-    app: &AppHandle<R>,
-    cat_id: &str,
-    event_block: &str,
-    last_b64: &mut Option<String>,
-) -> bool {
-    let mut event_type: Option<String> = None;
-    let mut emitted = false;
-    for line in event_block.lines() {
-        if let Some(rest) = line
-            .strip_prefix("event: ")
-            .or_else(|| line.strip_prefix("event:"))
-        {
-            event_type = Some(rest.trim().to_owned());
-            continue;
-        }
-        let Some(payload) = line
-            .strip_prefix("data: ")
-            .or_else(|| line.strip_prefix("data:"))
-        else {
-            continue;
-        };
-        let payload = payload.trim();
-        if payload.is_empty() || payload == "[DONE]" {
-            continue;
-        }
-        let json: serde_json::Value = match serde_json::from_str(payload) {
-            Ok(v) => v,
-            Err(error) => {
-                log::warn!("[openai] failed to parse SSE data: {error} payload={payload}");
-                continue;
-            }
-        };
-        // OpenAI image streaming has shipped two payload shapes in the wild:
-        // the b64 may sit at the top level, under `data` (singular), or under
-        // `data[0]` (array). Try each.
-        let b64_value = json
-            .get("b64_json")
-            .or_else(|| json.pointer("/data/b64_json"))
-            .or_else(|| json.pointer("/data/0/b64_json"));
-        let Some(b64) = b64_value.and_then(|v| v.as_str()) else {
-            log::info!(
-                "[openai] SSE event without b64 (event={:?}): {}",
-                event_type,
-                truncate_for_log(payload)
-            );
-            continue;
-        };
-        let partial_index = json
-            .get("partial_image_index")
-            .or_else(|| json.pointer("/data/partial_image_index"))
-            .and_then(serde_json::Value::as_u64);
-        log::info!(
-            "[openai] streaming partial: event={:?} index={:?} bytes_b64={}",
-            event_type,
-            partial_index,
-            b64.len()
-        );
-        let _ = app.emit(
-            PORTRAIT_PROGRESS_EVENT,
-            PortraitProgress {
-                cat_id: cat_id.to_owned(),
-                partial_index,
-                is_final: false,
-                data_url: format!("data:image/jpeg;base64,{b64}"),
-            },
-        );
-        *last_b64 = Some(b64.to_owned());
-        emitted = true;
-    }
-    emitted
-}
-
-fn truncate_for_log(s: &str) -> String {
-    const MAX: usize = 240;
-    if s.len() <= MAX {
-        s.to_owned()
-    } else {
-        format!("{}…(+{} bytes)", &s[..MAX], s.len() - MAX)
-    }
+    // Background removal moved to the frontend (`@imgly/background-removal`)
+    // which runs the segmentation model directly in the webview — no
+    // Python venv, no PATH detection, no shell-out. Backend just returns
+    // the raw gpt-image-2 bytes.
+    Ok(raw_bytes)
 }
 
 /// Build an *edit* prompt — short, because the base image already carries the
@@ -994,7 +768,8 @@ pub async fn generate_portrait<R: Runtime>(
     let api_key = require_key(app)?;
     let prompt = portrait_prompt(req);
     let base_image = cat_bases::bytes_for(req.cat_type);
-    let bytes = call_image_edit_streaming(app, &req.cat_id, &api_key, &prompt, base_image).await?;
+    let _ = app;
+    let bytes = call_image_edit(&req.cat_id, &api_key, &prompt, base_image).await?;
     image_cache::write_cached(&path, &bytes)?;
     Ok(PortraitResponse {
         path: path.to_string_lossy().into_owned(),
