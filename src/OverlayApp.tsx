@@ -8,7 +8,6 @@ import {
 	generateInterruptionTask,
 	getCat,
 	getUserProfile,
-	type OutcomeEffect,
 	readPortraitBytes,
 	recordTaskEvent,
 	regenCatPortrait,
@@ -20,12 +19,7 @@ import {
 	type InterruptionPayload,
 	onInterruptionRequested,
 } from "./lib/overlayApi";
-import type {
-	Cat,
-	GeneratedTaskBundle,
-	SkillId,
-	UserProfile,
-} from "./lib/types";
+import type { Cat, GeneratedTaskBundle, UserProfile } from "./lib/types";
 import { newId, nowIso } from "./lib/util";
 
 type Mode =
@@ -38,7 +32,6 @@ type Mode =
 			payload: InterruptionPayload;
 			disabledUntil: number;
 	  }
-	| { kind: "completed"; bundle: GeneratedTaskBundle; effect: OutcomeEffect }
 	| { kind: "error"; message: string };
 
 const TASK_READY_EVENT = "paws-task-ready";
@@ -73,8 +66,7 @@ function OverlayApp() {
 		setCat(c);
 		if (c?.portrait_path) {
 			try {
-				const b64 = await readPortraitBytes(c.portrait_path);
-				setPortraitDataUrl(`data:image/jpeg;base64,${b64}`);
+				setPortraitDataUrl(await readPortraitBytes(c.portrait_path));
 			} catch {
 				setPortraitDataUrl(null);
 			}
@@ -248,40 +240,43 @@ function OverlayApp() {
 					category: bundle.task.category,
 					outcome,
 					completed_at: event.created_at,
+					completion_line:
+						outcome === "completed" ? bundle.completion_line : null,
 				},
 				event,
 			);
 			setCat(updatedCat);
 
-			// If the cat's *visual* state changed (mood/tier/skills), kick off
-			// a fresh portrait in the background. Rust owns the level→tier
-			// formula and the cache key — the frontend just says "this cat's
-			// state changed, please regen". We don't await; the new portrait
-			// lands by the next time the user looks at the cat.
-			if (effect.regen_portrait) {
+			// Always regen on a real outcome (completion or dismissal),
+			// regardless of whether the portrait signature changed. gpt-image-2
+			// has built-in non-determinism so each call produces a fresh frame
+			// — that's the demo behavior we want. Inaccessible feedback skips
+			// regen since we don't want to "reward" a "not for me" with a
+			// shiny new portrait.
+			if (outcome !== "inaccessible") {
+				void effect; // signature change tracking now informational only
 				regenCatPortrait().catch(() => {
 					// Best effort; if it fails we just keep the old portrait.
 				});
 			}
 
+			// Immediate dismiss on every outcome — the interruption screen
+			// disappears as soon as the user acts. Cat reaction lands later
+			// in the bottom-right companion when the regen image is ready.
+			void effect;
 			if (outcome === "completed") {
 				completedCategoriesRef.current = [
 					bundle.task.category,
 					...completedCategoriesRef.current,
 				].slice(0, 5);
-				setMode({ kind: "completed", bundle, effect });
-				setTimeout(async () => {
-					await emit(TASK_RESET_EVENT);
-					await exitInterruption();
-				}, 2_500);
 			} else {
 				dismissedCategoriesRef.current = [
 					bundle.task.category,
 					...dismissedCategoriesRef.current,
 				].slice(0, 5);
-				await emit(TASK_RESET_EVENT);
-				await exitInterruption();
 			}
+			await emit(TASK_RESET_EVENT);
+			await exitInterruption();
 		},
 		[isPrimary],
 	);
@@ -330,35 +325,6 @@ function OverlayApp() {
 				/>
 			</InterruptionShell>
 		))
-		.with({ kind: "completed" }, (m) => (
-			<InterruptionShell>
-				<div className="task-card task-card-completed">
-					<div className="task-card-portrait">
-						{portraitDataUrl ? (
-							<img src={portraitDataUrl} alt={cat?.name ?? ""} />
-						) : null}
-					</div>
-					<p className="task-card-cat-line">{m.bundle.completion_line}</p>
-					{m.effect.unlocked_skills.length > 0 ? (
-						<div className="task-card-skill-unlock">
-							<div className="task-card-skill-unlock-label">
-								New skill unlocked
-							</div>
-							{m.effect.unlocked_skills.map((skillId) => (
-								<div key={skillId} className="task-card-skill-unlock-name">
-									{skillLabel(skillId)}
-								</div>
-							))}
-						</div>
-					) : null}
-					<p className="task-card-completed-hint">
-						{m.effect.streak_days > 0
-							? `Day ${m.effect.streak_days} of caring for ${cat?.name ?? "your cat"}.`
-							: "Maybe stretch a little. The cat is fine for a while."}
-					</p>
-				</div>
-			</InterruptionShell>
-		))
 		.with({ kind: "error" }, (m) => (
 			<InterruptionShell>
 				<div className="task-card">
@@ -379,14 +345,6 @@ function OverlayApp() {
 				</div>
 			</InterruptionShell>
 		))
-		.exhaustive();
-}
-
-function skillLabel(skillId: SkillId): string {
-	return match(skillId)
-		.with("occasional_self_feeding", () => "Occasional self-feeding")
-		.with("independent_play", () => "Independent play")
-		.with("self_grooming", () => "Self-grooming")
 		.exhaustive();
 }
 

@@ -352,12 +352,28 @@ const TIME_AWAY_TIERS_SECONDS: [(u32, &str); 3] = [
     ),
 ];
 
+// Hand-written passive moments. Picked at random per crediting tick so
+// repeated time-away blocks don't read identically. Mix of body language,
+// absurd specificity, and small dignity — never shame-coded.
 const STORY_LINES_PER_AWAY_BLOCK: &[&str] = &[
     "stretched into a perfect loaf",
     "watched a bug for an unreasonable amount of time",
     "knocked something off a shelf with extreme intent",
     "rolled belly-up for thirty unbroken seconds",
     "found the warmest square inch in the room",
+    "stared into the middle distance and made a small chirp",
+    "performed an intense five-minute zoomie circuit",
+    "reorganized their personal box collection",
+    "judged a passing pigeon",
+    "gave the curtains a thorough investigation",
+    "did a slow blink at nothing in particular",
+    "demanded a window for two unbroken minutes",
+    "knocked over a single pen with surgical precision",
+    "kneaded a blanket into philosophical surrender",
+    "fell asleep mid-grooming and woke up offended",
+    "cataloged every patch of sun in the apartment",
+    "stalked their own shadow for some reason",
+    "claimed a paper bag as new sovereign territory",
 ];
 
 fn apply_time_away_reward<R: Runtime>(app: &AppHandle<R>, credit_seconds: u32) {

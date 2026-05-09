@@ -100,6 +100,10 @@ export interface OutcomePayload {
 	category: TaskCategory;
 	outcome: TaskOutcome;
 	completed_at: string;
+	/// LLM-generated cat reaction from the task bundle. Stored as the
+	/// story-moment text on completion so each entry sounds like the cat,
+	/// not a templated "Mango watched you finish a movement task".
+	completion_line: string | null;
 }
 
 export interface OutcomeEffect {

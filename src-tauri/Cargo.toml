@@ -38,6 +38,8 @@ tokio = { version = "1.52.3", features = [
     "macros",
     "sync",
     "time",
+    "process",
+    "io-util",
 ] }
 reqwest = { version = "0.13", default-features = false, features = [
     "json",

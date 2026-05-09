@@ -57,13 +57,12 @@ button:disabled {
 }
 
 /* Companion mode — tiny desktop pet sitting in the bottom-right corner.
- * The panel is 80×80; we leave 8px padding so the circular frame
- * (border-radius: 50%) doesn't get clipped at the panel's square edges,
- * and there's room for any future drop shadow we want to add back. */
+ * The panel is fully transparent; only the cat illustration itself shows.
+ * No frame fill, no ring, no halo — the cat carries its own visual. */
 .companion {
 	width: 100%;
 	height: 100%;
-	padding: 8px;
+	padding: 0;
 	background: transparent;
 	border: 0;
 	cursor: grab;
@@ -77,14 +76,7 @@ button:disabled {
 .companion-frame {
 	width: 100%;
 	height: 100%;
-	background: rgba(255, 250, 242, 0.92);
-	border-radius: 50%;
-	overflow: hidden;
-	/* Inset-only outlines so the shadow doesn't extend outside the small
-	 * panel and get clipped. Two-stop ring for visibility on any wallpaper. */
-	box-shadow:
-		0 0 0 2px #b85c2a inset,
-		0 0 0 4px rgba(255, 255, 255, 0.85) inset;
+	background: transparent;
 	display: grid;
 	place-items: center;
 	animation: companion-bob 5s ease-in-out infinite;
@@ -95,20 +87,21 @@ button:disabled {
 	cursor: grabbing;
 }
 
-.companion-frame img,
+.companion-frame img {
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+
+/* Empty-state placeholder before the user adopts a cat: just the paw on
+ * transparent so it's findable without painting a background panel. */
 .companion-placeholder {
 	width: 100%;
 	height: 100%;
-	object-fit: cover;
-}
-
-/* Bright peach + paw emoji so the empty-state companion is unmissable
- * before the user has adopted a cat. */
-.companion-placeholder {
-	background: linear-gradient(135deg, #f6a86b 0%, #e0823f 100%);
 	display: grid;
 	place-items: center;
-	font-size: 26px;
+	font-size: 32px;
+	filter: drop-shadow(0 2px 4px rgba(53, 30, 12, 0.45));
 }
 
 .companion-placeholder::before {

@@ -73,7 +73,7 @@ export function CatAdoption() {
 			// starting state; first edit-API regeneration only happens
 			// later when mood/tier/skills change.
 			const portrait = await seedInitialPortrait(catId, choice.type);
-			const b64 = await readPortraitBytes(portrait.path);
+			const dataUrl = await readPortraitBytes(portrait.path);
 			const cat: Cat = {
 				id: catId,
 				type: choice.type,
@@ -96,7 +96,7 @@ export function CatAdoption() {
 				portrait_path: portrait.path,
 			};
 			await saveCat(cat);
-			setRevealed({ choice, dataUrl: `data:image/jpeg;base64,${b64}`, cat });
+			setRevealed({ choice, dataUrl, cat });
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {

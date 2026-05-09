@@ -38,7 +38,11 @@ pub fn make_key(parts: &[&str]) -> String {
 }
 
 pub fn path_for_key<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<PathBuf> {
-    Ok(cache_dir(app)?.join(format!("cat-{key}.jpg")))
+    // Always `.png` — the canonical output is the rembg-processed PNG with
+    // alpha. If rembg is unavailable, we save raw JPEG bytes to the same
+    // path; `read_portrait_bytes` sniffs the actual format from magic
+    // bytes so the data URL gets the correct mime regardless.
+    Ok(cache_dir(app)?.join(format!("cat-{key}.png")))
 }
 
 pub fn read_cached(path: &Path) -> Option<Vec<u8>> {

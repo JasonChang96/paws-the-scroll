@@ -12,7 +12,14 @@ mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = env_logger::try_init();
+    // Respect RUST_LOG if set; otherwise default to info-level for our
+    // crate so OpenAI calls, overlay positioning, and rembg attempts show
+    // up in the dev terminal without the user having to know the env var.
+    let _ = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("paws_the_scroll_lib=info"),
+    )
+    .format_timestamp_secs()
+    .try_init();
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

@@ -34,8 +34,13 @@ pub fn apply_task_outcome(
     let Some(mut cat) = store::read_cat(&app).map_err(|e| e.to_string())? else {
         return Err("no cat found — finish onboarding first".into());
     };
-    let effect =
-        cat_state::apply_task_outcome(&mut cat, payload.category, payload.outcome, &history);
+    let effect = cat_state::apply_task_outcome(
+        &mut cat,
+        payload.category,
+        payload.outcome,
+        payload.completion_line.as_deref(),
+        &history,
+    );
     store::write_cat(&app, &cat).map_err(|e| e.to_string())?;
     Ok(ApplyTaskOutcomeResponse { cat, effect })
 }

@@ -475,6 +475,11 @@ async fn call_chat_json<T: serde::de::DeserializeOwned>(
     if let Some(key) = &tuning.cache_key {
         body["prompt_cache_key"] = serde_json::Value::String(key.clone());
     }
+    log::info!(
+        "[openai] POST /v1/responses model={CHAT_MODEL} cache_key={:?}",
+        tuning.cache_key
+    );
+    let started = std::time::Instant::now();
     let resp = client
         .post(format!("{OPENAI_BASE_URL}/responses"))
         .bearer_auth(api_key)
@@ -487,6 +492,11 @@ async fn call_chat_json<T: serde::de::DeserializeOwned>(
         .text()
         .await
         .context("failed to read OpenAI responses body")?;
+    log::info!(
+        "[openai] /v1/responses {status} in {}ms ({} bytes)",
+        started.elapsed().as_millis(),
+        text.len()
+    );
     if !status.is_success() {
         bail!("OpenAI responses returned {status}: {text}");
     }
@@ -640,6 +650,11 @@ async fn call_image_edit_streaming<R: Runtime>(
                 .mime_str("image/png")
                 .context("failed to set image part mime")?,
         );
+    log::info!(
+        "[openai] POST /v1/images/edits model={IMAGE_MODEL} cat_id={cat_id} \
+         (multipart, stream=true, partial_images=3, quality=low)"
+    );
+    let started = std::time::Instant::now();
     let resp = client
         .post(format!("{OPENAI_BASE_URL}/images/edits"))
         .bearer_auth(api_key)
@@ -649,6 +664,10 @@ async fn call_image_edit_streaming<R: Runtime>(
         .await
         .context("OpenAI image edit request failed")?;
     let status = resp.status();
+    log::info!(
+        "[openai] /v1/images/edits opened {status} in {}ms — streaming partials…",
+        started.elapsed().as_millis()
+    );
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
         bail!("OpenAI images returned {status}: {text}");
@@ -691,21 +710,120 @@ async fn call_image_edit_streaming<R: Runtime>(
     let final_b64 =
         last_b64.ok_or_else(|| anyhow!("OpenAI image stream ended without any frames"))?;
 
-    // Re-emit the last frame as the final so the frontend has a clean signal
-    // to swap from "still streaming" to "done".
+    let raw_bytes = base64::engine::general_purpose::STANDARD
+        .decode(final_b64.as_bytes())
+        .context("failed to base64-decode final streamed image")?;
+
+    // gpt-image-2 doesn't honor `background: "transparent"` and tends to
+    // paint a solid backdrop even when the prompt asks for isolation. Pipe
+    // through `rembg` to actually strip it. If rembg isn't installed the
+    // helper returns the original bytes and we keep the opaque image.
+    let processed = remove_background_via_rembg(&raw_bytes).await;
+
+    // Final emit uses the rembg-processed PNG so the frontend's last
+    // streamed frame matches what we just wrote to disk.
+    let final_data_url = match &processed {
+        Some(png_bytes) => {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(png_bytes);
+            format!("data:image/png;base64,{b64}")
+        }
+        None => format!("data:image/jpeg;base64,{final_b64}"),
+    };
     let _ = app.emit(
         PORTRAIT_PROGRESS_EVENT,
         PortraitProgress {
             cat_id: cat_id.to_owned(),
             partial_index: None,
             is_final: true,
-            data_url: format!("data:image/jpeg;base64,{final_b64}"),
+            data_url: final_data_url,
         },
     );
 
-    base64::engine::general_purpose::STANDARD
-        .decode(final_b64.as_bytes())
-        .context("failed to base64-decode final streamed image")
+    Ok(processed.unwrap_or(raw_bytes))
+}
+
+/// Pipe the JPEG bytes through `rembg i - -` (stdin → stdout) and return
+/// the PNG-with-alpha output. Tries a few invocations so all common rembg
+/// installs work without requiring the user to activate a venv first:
+///
+///   1. `rembg` — works for global installs (`uv tool install rembg`,
+///      `pipx install rembg[cli]`, `pip install --user`).
+///   2. `uv run rembg` — works for project-local installs (`uv add rembg`
+///      inside this repo). `uv run` walks up from cwd to find the
+///      pyproject.toml + .venv automatically.
+///   3. `./.venv/bin/rembg` and `../.venv/bin/rembg` — direct paths for the
+///      common project-venv layouts when uv isn't on PATH either.
+///
+/// Returns `None` only if every candidate fails; caller falls back to the
+/// original opaque bytes.
+async fn remove_background_via_rembg(jpeg_bytes: &[u8]) -> Option<Vec<u8>> {
+    let candidates: &[(&str, &[&str])] = &[
+        ("rembg", &["i", "-", "-"]),
+        ("uv", &["run", "rembg", "i", "-", "-"]),
+        ("./.venv/bin/rembg", &["i", "-", "-"]),
+        ("../.venv/bin/rembg", &["i", "-", "-"]),
+    ];
+    for (cmd, args) in candidates {
+        match try_rembg_invocation(cmd, args, jpeg_bytes).await {
+            Ok(bytes) => {
+                log::info!(
+                    "[openai] rembg ({cmd}) processed: {} bytes JPEG -> {} bytes PNG",
+                    jpeg_bytes.len(),
+                    bytes.len()
+                );
+                return Some(bytes);
+            }
+            Err(reason) => {
+                log::debug!("[openai] rembg attempt via `{cmd}` failed: {reason}");
+            }
+        }
+    }
+    log::info!(
+        "[openai] rembg unavailable on every candidate path; keeping opaque image. \
+         Install globally with `uv tool install rembg` or run from a shell with the \
+         project venv activated."
+    );
+    None
+}
+
+async fn try_rembg_invocation(
+    cmd: &str,
+    args: &[&str],
+    jpeg_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncWriteExt;
+    use tokio::process::Command;
+
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(jpeg_bytes)
+            .await
+            .map_err(|e| format!("stdin write: {e}"))?;
+        drop(stdin);
+    }
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("wait: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "exit {} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if output.stdout.is_empty() {
+        return Err("empty stdout".into());
+    }
+    Ok(output.stdout)
 }
 
 /// Returns `true` if at least one b64 frame was extracted and emitted.
@@ -796,14 +914,17 @@ fn truncate_for_log(s: &str) -> String {
 /// the base: mood, independence, earned-skill details. Keep the same
 /// character, same composition, same illustration style.
 fn portrait_prompt(req: &PortraitRequest) -> String {
+    // Mood phrases tuned for gpt-image-2 to render visibly distinct frames
+    // at the small companion size — bold pose + facial language, not subtle
+    // microexpressions the model would average out.
     let mood = match req.mood {
-        CatMood::Content => "calm, content expression",
-        CatMood::Smug => "smug, eyes-half-closed satisfaction",
-        CatMood::Sulky => "sulky, ears slightly back, dramatic disappointment",
-        CatMood::Excited => "alert, ears forward, bright eyes",
-        CatMood::Dramatic => "exaggerated theatrical pose, big eyes",
-        CatMood::Sleepy => "loafing, sleepy, blinking softly",
-        CatMood::Affectionate => "cheek-rubbing, warm, eyes closed in trust",
+        CatMood::Content => "relaxed, neutral expression, eyes forward, calm posture",
+        CatMood::Smug => "clearly proud and pleased, lifted chin, slow-blink half-closed eyes, faint smile, chest puffed out",
+        CatMood::Sulky => "visibly disappointed, head turned slightly away, ears flattened, no eye contact, downcast eyes, hunched posture",
+        CatMood::Excited => "wide bright eyes, ears perked sharply forward, mid-celebratory wiggle, mouth slightly open, alert and energized",
+        CatMood::Dramatic => "exaggerated theatrical despair, paw raised toward forehead, huge round sad eyes, fainting-couch energy",
+        CatMood::Sleepy => "eyes mostly closed, loafing pose, soft sleepy blink, content and dozing",
+        CatMood::Affectionate => "warm cheek-rub posture, eyes squinted shut in trust, soft happy expression, clearly pleased with you",
     };
     let independence = match req.independence_tier {
         IndependenceTier::Tier0 => "needy and clingy posture",
@@ -820,7 +941,9 @@ fn portrait_prompt(req: &PortraitRequest) -> String {
     format!(
         "Same cat, same character, same composition. {PORTRAIT_STYLE_ANCHOR} \
          Adjust pose and expression: {mood}; {independence}.{skill_clause} \
-         Centered, full body, no text."
+         Centered, full body, no text. \
+         The cat is fully isolated on a clean transparent background — \
+         no scenery, no shadows on the ground, no painted backdrop."
     )
 }
 
@@ -860,12 +983,14 @@ pub async fn generate_portrait<R: Runtime>(
     let key = image_cache::make_key(&key_parts);
     let path = image_cache::path_for_key(app, &key)?;
 
-    if image_cache::read_cached(&path).is_some() {
-        return Ok(PortraitResponse {
-            path: path.to_string_lossy().into_owned(),
-            cached: true,
-        });
-    }
+    // No cache hit short-circuit. Every regen call hits gpt-image-2 so the
+    // user actually sees a fresh image each time, even when mood + tier +
+    // skills repeat. The on-disk file is still the canonical place we
+    // store the most-recent portrait — we just always overwrite it.
+    log::info!(
+        "[openai] regenerating portrait cat_id={} mood={mood_label} tier={tier_label} skills={skills_hash}",
+        req.cat_id
+    );
     let api_key = require_key(app)?;
     let prompt = portrait_prompt(req);
     let base_image = cat_bases::bytes_for(req.cat_type);
@@ -900,7 +1025,18 @@ pub async fn generate_cat_portrait(
 #[tauri::command]
 pub async fn read_portrait_bytes(path: String) -> Result<String, String> {
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+    // Sniff the actual format from magic bytes — the cache might hold PNG
+    // (rembg-processed) or JPEG (rembg unavailable) and the data URL needs
+    // the correct mime so Tauri's WebKit decodes it.
+    let mime = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "image/png"
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else {
+        "image/png"
+    };
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{mime};base64,{b64}"))
 }
 
 /// Seed the initial portrait at adoption time using the embedded base image.

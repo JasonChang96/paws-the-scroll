@@ -88,10 +88,16 @@ impl NeedField {
 
 /// Apply a task outcome to the cat in-place. Returns metadata the caller
 /// uses to drive UI feedback (regen portrait, surface unlocked skills).
+///
+/// `completion_line` is the LLM-generated cat reaction from the task
+/// bundle (e.g. "Fine. Acceptable. I have survived another minute."). Using
+/// it as the story-moment text gives every entry the cat's voice instead
+/// of one templated string repeated forever.
 pub fn apply_task_outcome(
     cat: &mut Cat,
     category: TaskCategory,
     outcome: TaskOutcome,
+    completion_line: Option<&str>,
     history: &[TaskEvent],
 ) -> OutcomeEffect {
     let previous_signature = portrait_signature(cat);
@@ -101,14 +107,23 @@ pub fn apply_task_outcome(
             for (field, drop) in need_decrements_for_category(category) {
                 field.apply_delta(&mut cat.needs, -drop);
             }
-            push_story(
-                cat,
-                &format!(
-                    "{} watched you finish a {} task and looks pleased.",
-                    cat.name,
-                    category_label(category)
-                ),
-            );
+            let story_line = completion_line
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map_or_else(
+                    || {
+                        format!(
+                            "{} watched you finish a {} task and looks pleased.",
+                            cat.name,
+                            category_label(category)
+                        )
+                    },
+                    // Quote the cat's own line — the LLM phrased this in
+                    // character for the specific task; way more varied than
+                    // any template we'd hand-write.
+                    |line| format!("{}: {line}", cat.name),
+                );
+            push_story(cat, &story_line);
         }
         TaskOutcome::Dismissed => {
             // Dismissal isn't free — a couple of needs creep up. Kept small
@@ -152,9 +167,10 @@ fn category_label(category: TaskCategory) -> &'static str {
     }
 }
 
-/// Pick a mood from the current cat state. We prefer state-driven moods so
-/// the portrait reflects what's actually true rather than a hardcoded
-/// "smug on completion" rule.
+/// Pick a mood that *clearly* maps to the outcome. The point is for the
+/// regenerated portrait to read at a glance — completed = visibly positive,
+/// dismissed = visibly negative, inaccessible = neutral. We pick *which*
+/// flavor of positive/negative based on cat state so it isn't a hard binary.
 fn derive_mood(cat: &Cat, outcome: TaskOutcome) -> CatMood {
     let aggregate_need = cat.needs.hunger
         + cat.needs.boredom
@@ -175,17 +191,31 @@ fn derive_mood(cat: &Cat, outcome: TaskOutcome) -> CatMood {
     .fold(0.0_f32, f32::max);
 
     match outcome {
-        TaskOutcome::Dismissed => CatMood::Sulky,
-        TaskOutcome::Inaccessible => CatMood::Content,
-        TaskOutcome::Completed => {
-            if aggregate_need < 0.6 && cat.independence_level >= 0.5 {
-                CatMood::Smug
-            } else if aggregate_need < 0.8 {
-                CatMood::Affectionate
-            } else if highest_need > 0.85 {
+        // Dismissals always land on a clearly-negative mood. Sulky is the
+        // baseline; Dramatic kicks in when the cat had a high need that
+        // just got ignored — the rejection lands harder.
+        TaskOutcome::Dismissed => {
+            if highest_need > 0.7 {
                 CatMood::Dramatic
             } else {
-                CatMood::Content
+                CatMood::Sulky
+            }
+        }
+        // "This doesn't work for me" is structurally different from a
+        // dismissal — the user is feeding back about category fit, not
+        // refusing care. Stay neutral, no penalty pose.
+        TaskOutcome::Inaccessible => CatMood::Content,
+        // Completions always land on a clearly-positive mood. Affectionate
+        // when the cat has been well-tended (low needs); Excited when it
+        // just got a need met that was actually pressing; Smug when the
+        // cat has earned independence and is being *gracious* about it.
+        TaskOutcome::Completed => {
+            if highest_need > 0.6 {
+                CatMood::Excited
+            } else if cat.independence_level >= 0.5 && aggregate_need < 0.6 {
+                CatMood::Smug
+            } else {
+                CatMood::Affectionate
             }
         }
     }
@@ -340,4 +370,9 @@ pub struct OutcomePayload {
     pub category: TaskCategory,
     pub outcome: TaskOutcome,
     pub completed_at: DateTime<Utc>,
+    /// The LLM-generated `completion_line` from the task bundle. Stored as
+    /// the story-moment text when present so each completion sounds like
+    /// the cat said it, not a templated string.
+    #[serde(default)]
+    pub completion_line: Option<String>,
 }
