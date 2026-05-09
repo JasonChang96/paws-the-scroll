@@ -12,6 +12,7 @@ import {
 	getCat,
 	getUserProfile,
 	persistStrippedPortrait,
+	predictOutcomePortraits,
 	readPortraitBytes,
 	recordTaskEvent,
 	regenCatPortrait,
@@ -222,12 +223,23 @@ function OverlayApp() {
 						payload: event.payload.payload,
 						disabledUntil: event.payload.disabledUntil,
 					});
+					// Pre-warm the post-click portrait the moment the task is
+					// shown — Rust spawns parallel gpt-image-2 calls for the
+					// Completed and Dismissed mood paths so the click swaps
+					// instantly via the freshness cache. Re-fires per reroll
+					// since task category shapes Completed-mood prediction.
+					if (cat) {
+						void predictOutcomePortraits(
+							cat.id,
+							event.payload.bundle.task.category,
+						);
+					}
 				},
 			);
 			unlisten = off;
 		})();
 		return () => unlisten?.();
-	}, []);
+	}, [cat]);
 
 	useEffect(() => {
 		let unlisten: (() => void) | undefined;

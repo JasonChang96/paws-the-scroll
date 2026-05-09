@@ -53,6 +53,7 @@ pub fn run() {
             openai::seed_initial_portrait,
             openai::persist_stripped_portrait,
             openai::read_portrait_bytes,
+            openai::predict_outcome_portraits,
             activity::request_interruption,
             activity::current_foreground,
             activity::accessibility_trusted,

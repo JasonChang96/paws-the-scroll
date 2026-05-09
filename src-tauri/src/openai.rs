@@ -8,6 +8,9 @@
 
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -15,19 +18,44 @@ use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::cat_bases;
 use crate::cat_state;
 use crate::image_cache;
 use crate::model::{
-    CatMood, CatTone, CatType, Environment, GeneratedTaskBundle, IndependenceTier, Mobility,
-    SkillId, StuckPattern, TaskBoundary,
+    Cat, CatMood, CatTone, CatType, Environment, GeneratedTaskBundle, IndependenceTier, Mobility,
+    SkillId, StuckPattern, TaskBoundary, TaskCategory, TaskEvent,
 };
 use crate::store;
 
 const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const CHAT_MODEL: &str = "gpt-5.5";
 const IMAGE_MODEL: &str = "gpt-image-2";
+/// Cached portrait files newer than this window are reused without hitting
+/// gpt-image-2 again. Long enough to cover the typical interruption duration
+/// (5s lockout + reading + reroll loops); short enough that subsequent
+/// interruptions still get fresh art.
+const PORTRAIT_FRESHNESS_WINDOW: Duration = Duration::from_mins(3);
+
+/// Per-path async mutex used to dedupe concurrent `generate_portrait` calls
+/// targeting the same cache key. The disk-freshness check only catches
+/// already-completed generations; without this, a pre-gen still in flight
+/// when the user clicks "I did it" would let `regen_cat_portrait` kick off
+/// a third duplicate API call. We hold this lock across the API call + write
+/// so any concurrent caller for the same path waits and then sees the freshly
+/// written file via the freshness window.
+fn portrait_locks() -> &'static AsyncMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>> {
+    static LOCKS: OnceLock<AsyncMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> = OnceLock::new();
+    LOCKS.get_or_init(|| AsyncMutex::new(HashMap::new()))
+}
+
+async fn portrait_lock_for(path: &Path) -> Arc<AsyncMutex<()>> {
+    let mut map = portrait_locks().lock().await;
+    map.entry(path.to_path_buf())
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone()
+}
 
 /// Compact context the frontend passes for task generation. Field names match
 /// the PRD §9 "AI Context Inputs" list.
@@ -787,10 +815,41 @@ pub async fn generate_portrait<R: Runtime>(
     let key = image_cache::make_key(&key_parts);
     let path = image_cache::path_for_key(app, &key)?;
 
-    // No cache hit short-circuit. Every regen call hits gpt-image-2 so the
-    // user actually sees a fresh image each time, even when mood + tier +
-    // skills repeat. The on-disk file is still the canonical place we
-    // store the most-recent portrait — we just always overwrite it.
+    // Serialize concurrent calls targeting the same cache key. Without this,
+    // a pre-gen still in flight when the user clicks would let
+    // `regen_cat_portrait` start a third duplicate API call (the disk
+    // freshness check can't see in-flight work). Holding this lock across
+    // the API call + write means the second caller waits, then either picks
+    // up the freshly-written file via the freshness check below or — if
+    // the producer failed — proceeds to generate itself.
+    let lock = portrait_lock_for(&path).await;
+    let _guard = lock.lock().await;
+
+    // Recent-file cache: if a file exists at this exact state-keyed path
+    // and was written within `PORTRAIT_FRESHNESS_WINDOW`, reuse it. This
+    // lets `predict_outcome_portraits` pre-warm files that the post-click
+    // `regen_cat_portrait` then reuses for an instant swap. Older files
+    // are treated as stale and trigger a fresh API call so we keep the
+    // "every interruption produces new art" property *across* sessions.
+    if let Ok(metadata) = std::fs::metadata(&path) {
+        if let Ok(modified) = metadata.modified() {
+            let age = std::time::SystemTime::now()
+                .duration_since(modified)
+                .unwrap_or_default();
+            if age < PORTRAIT_FRESHNESS_WINDOW {
+                log::info!(
+                    "[openai] portrait cache hit (fresh, age {}s) cat_id={} mood={mood_label}",
+                    age.as_secs(),
+                    req.cat_id
+                );
+                return Ok(PortraitResponse {
+                    path: path.to_string_lossy().into_owned(),
+                    cached: true,
+                });
+            }
+        }
+    }
+
     log::info!(
         "[openai] regenerating portrait cat_id={} mood={mood_label} tier={tier_label} skills={skills_hash}",
         req.cat_id
@@ -798,11 +857,23 @@ pub async fn generate_portrait<R: Runtime>(
     let api_key = require_key(app)?;
     let prompt = portrait_prompt(req);
     let base_image = cat_bases::bytes_for(req.cat_type);
-    let _ = app;
     let bytes = call_image_edit(&req.cat_id, &api_key, &prompt, base_image).await?;
     image_cache::write_cached(&path, &bytes)?;
+    // The bytes we just wrote include the gpt-image-2 background. If the cat
+    // is currently displaying this exact path with `portrait_is_base = true`
+    // (a previous run had stripped + persisted at this path), the frontend
+    // would short-circuit on its next read and flash the un-stripped image
+    // before regen_cat_portrait flips the flag. Invalidate proactively so
+    // the strip path always runs for these fresh API bytes.
+    let path_str = path.to_string_lossy().into_owned();
+    if let Ok(Some(mut cat)) = store::read_cat(app) {
+        if cat.portrait_is_base && cat.portrait_path.as_deref() == Some(path_str.as_str()) {
+            cat.portrait_is_base = false;
+            let _ = store::write_cat(app, &cat);
+        }
+    }
     Ok(PortraitResponse {
-        path: path.to_string_lossy().into_owned(),
+        path: path_str,
         cached: false,
     })
 }
@@ -954,4 +1025,106 @@ pub async fn regen_cat_portrait(app: AppHandle) -> Result<PortraitResponse, Stri
     updated.portrait_is_base = false;
     store::write_cat(&app, &updated).map_err(|e| e.to_string())?;
     Ok(response)
+}
+
+/// Pre-generate the two portraits the user *might* land on after this
+/// interruption (Completed-mood and Dismissed-mood) in parallel, so the
+/// post-click `regen_cat_portrait` call can short-circuit on a fresh cache
+/// hit and swap instantly. Inaccessible doesn't change mood, so we don't
+/// pre-gen for it. Fire-and-forget — Frontend invokes this whenever a new
+/// task bundle is shown (initial + every reroll).
+#[tauri::command]
+pub fn predict_outcome_portraits<R: Runtime>(
+    app: AppHandle<R>,
+    cat_id: String,
+    task_category: TaskCategory,
+) -> Result<(), String> {
+    let Some(cat) = store::read_cat(&app).map_err(|e| e.to_string())? else {
+        return Ok(()); // no cat yet, nothing to predict
+    };
+    if cat.id != cat_id {
+        // Cat changed under us; bail rather than gen for the wrong character.
+        return Ok(());
+    }
+    let history = store::read_task_events(&app).unwrap_or_default();
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        run_outcome_predictions(&app_clone, cat, task_category, history).await;
+    });
+    Ok(())
+}
+
+async fn run_outcome_predictions<R: Runtime>(
+    app: &AppHandle<R>,
+    cat: Cat,
+    task_category: TaskCategory,
+    history: Vec<TaskEvent>,
+) {
+    log::info!(
+        "[openai] pre-gen kicked off for cat_id={} (Completed + Dismissed in parallel)",
+        cat.id
+    );
+    let cat_for_completed = cat.clone();
+    let cat_for_dismissed = cat;
+    let history_completed = history.clone();
+    let history_dismissed = history;
+
+    let app_c = app.clone();
+    let app_d = app.clone();
+    let (c_result, d_result) = tokio::join!(
+        predict_one_outcome(
+            &app_c,
+            cat_for_completed,
+            task_category,
+            crate::cat_state::TaskOutcome::Completed,
+            history_completed,
+        ),
+        predict_one_outcome(
+            &app_d,
+            cat_for_dismissed,
+            task_category,
+            crate::cat_state::TaskOutcome::Dismissed,
+            history_dismissed,
+        ),
+    );
+    log::info!(
+        "[openai] pre-gen finished — completed: {}, dismissed: {}",
+        result_summary(&c_result),
+        result_summary(&d_result)
+    );
+}
+
+async fn predict_one_outcome<R: Runtime>(
+    app: &AppHandle<R>,
+    mut cat: Cat,
+    category: TaskCategory,
+    outcome: crate::cat_state::TaskOutcome,
+    history: Vec<TaskEvent>,
+) -> Result<PortraitResponse> {
+    // Mutate the cloned cat as `apply_task_outcome` would in real flow,
+    // so the resulting `mood` matches what `derive_mood` will produce on
+    // the actual click. Skip the persist — this is a prediction.
+    let _ = crate::cat_state::apply_task_outcome(&mut cat, category, outcome, None, &history);
+    let request = PortraitRequest {
+        cat_id: cat.id.clone(),
+        cat_type: cat.cat_type,
+        mood: cat.mood,
+        independence_tier: IndependenceTier::from_level(cat.independence_level),
+        accessory_set_hash: "v1".into(),
+        skills: cat.skills.clone(),
+    };
+    generate_portrait(app, &request).await
+}
+
+fn result_summary(result: &Result<PortraitResponse>) -> String {
+    match result {
+        Ok(response) => {
+            if response.cached {
+                "cached".to_owned()
+            } else {
+                "generated".to_owned()
+            }
+        }
+        Err(error) => format!("ERROR: {error}"),
+    }
 }

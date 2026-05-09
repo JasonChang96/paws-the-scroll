@@ -164,3 +164,15 @@ export const persistStrippedPortrait = (
 	path: string,
 	dataUrl: string,
 ): Promise<void> => invoke("persist_stripped_portrait", { path, dataUrl });
+
+/// Pre-generate the two portraits the user *might* land on after this
+/// interruption (Completed-mood and Dismissed-mood) in parallel. Fire-and-
+/// forget — Rust spawns a background task and the post-click
+/// `regenCatPortrait` short-circuits on the freshly-cached file. Invoke
+/// whenever a new task bundle is shown (initial + every reroll), since
+/// task category affects the predicted Completed mood.
+export const predictOutcomePortraits = (
+	catId: string,
+	taskCategory: TaskCategory,
+): Promise<void> =>
+	invoke("predict_outcome_portraits", { catId, taskCategory });
