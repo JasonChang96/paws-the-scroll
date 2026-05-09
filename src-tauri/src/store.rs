@@ -187,14 +187,44 @@ pub fn append_task_catalogue_entry<R: Runtime>(
 ) -> Result<()> {
     let mut entries = read_task_catalogue(app)?;
     let normalized_title = entry.bundle.task.title.trim().to_lowercase();
+    let candidate_words =
+        catalogue_similarity_words(&entry.bundle.task.title, &entry.bundle.task.instruction);
     if entries.iter().any(|existing| {
         existing.bundle.task.title.trim().to_lowercase() == normalized_title
             && existing.category == entry.category
+            || catalogue_similarity_words(
+                &existing.bundle.task.title,
+                &existing.bundle.task.instruction,
+            )
+            .intersection(&candidate_words)
+            .count()
+                >= 4
     }) {
         return Ok(());
     }
     entries.push(entry);
     write_task_catalogue(app, &entries)
+}
+
+fn catalogue_similarity_words(
+    title: &str,
+    instruction: &str,
+) -> std::collections::BTreeSet<String> {
+    const STOP_WORDS: &[&str] = &[
+        "and", "are", "back", "both", "can", "for", "from", "into", "like", "near", "one", "put",
+        "sit", "the", "then", "with", "you", "your",
+    ];
+    format!("{title} {instruction}")
+        .split(|character: char| !character.is_alphanumeric())
+        .filter_map(|raw| {
+            let token = raw.trim().to_lowercase();
+            if token.len() < 4 || STOP_WORDS.contains(&token.as_str()) {
+                None
+            } else {
+                Some(token)
+            }
+        })
+        .collect()
 }
 
 pub fn update_task_catalogue_entry<R: Runtime>(

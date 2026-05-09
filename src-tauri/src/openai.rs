@@ -8,7 +8,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -791,6 +791,80 @@ fn task_matches_context(bundle: &GeneratedTaskBundle, ctx: &TaskContext) -> bool
         && (!ctx.want_fallback || bundle.task.fallback_safe)
 }
 
+fn task_memory_text(bundle: &GeneratedTaskBundle) -> String {
+    format!("{} {}", bundle.task.title, bundle.task.instruction).to_lowercase()
+}
+
+fn token_set(text: &str) -> BTreeSet<String> {
+    const STOP_WORDS: &[&str] = &[
+        "a", "an", "and", "are", "as", "at", "back", "be", "both", "by", "can", "do", "for",
+        "from", "if", "in", "into", "is", "it", "its", "like", "near", "of", "one", "or", "out",
+        "put", "sit", "so", "the", "then", "to", "up", "with", "you", "your",
+    ];
+    text.split(|character: char| !character.is_alphanumeric())
+        .filter_map(|raw| {
+            let token = raw.trim().to_lowercase();
+            if token.len() < 3 || STOP_WORDS.contains(&token.as_str()) {
+                None
+            } else {
+                Some(token)
+            }
+        })
+        .collect()
+}
+
+fn text_similarity(left: &str, right: &str) -> f32 {
+    let left_tokens = token_set(left);
+    let right_tokens = token_set(right);
+    if left_tokens.is_empty() || right_tokens.is_empty() {
+        return 0.0;
+    }
+    let intersection = left_tokens.intersection(&right_tokens).count();
+    let union = left_tokens.union(&right_tokens).count();
+    #[allow(clippy::cast_precision_loss)]
+    {
+        intersection as f32 / union as f32
+    }
+}
+
+fn tasks_are_too_similar(candidate: &GeneratedTaskBundle, previous_text: &str) -> bool {
+    let candidate_text = task_memory_text(candidate);
+    candidate
+        .task
+        .title
+        .trim()
+        .eq_ignore_ascii_case(previous_text.trim())
+        || text_similarity(&candidate_text, previous_text) >= 0.32
+}
+
+fn recent_task_texts<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
+    let mut texts: Vec<String> = store::read_task_events(app)
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .filter_map(|event| match (event.task_title, event.task_instruction) {
+            (Some(title), Some(instruction)) => Some(format!("{title} {instruction}")),
+            (Some(title), None) => Some(title),
+            _ => None,
+        })
+        .take(20)
+        .collect();
+
+    let mut shown_catalogue: Vec<TaskCatalogueEntry> = store::read_task_catalogue(app)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.last_shown_at.is_some())
+        .collect();
+    shown_catalogue.sort_by_key(|entry| std::cmp::Reverse(entry.last_shown_at));
+    texts.extend(
+        shown_catalogue
+            .into_iter()
+            .take(20)
+            .map(|entry| task_memory_text(&entry.bundle)),
+    );
+    texts
+}
+
 fn catalogue_sort_key(entry: &TaskCatalogueEntry) -> (u32, u32, chrono::DateTime<Utc>) {
     (
         entry.display_count,
@@ -883,8 +957,26 @@ pub fn select_catalogue_task<R: Runtime>(
     app: AppHandle<R>,
     context: TaskContext,
 ) -> Result<Option<GeneratedTaskBundle>, String> {
-    let mut entries = store::read_task_catalogue(&app).map_err(|e| e.to_string())?;
-    entries.retain(|entry| task_matches_context(&entry.bundle, &context));
+    let recent_texts = recent_task_texts(&app);
+    let entries = store::read_task_catalogue(&app).map_err(|e| e.to_string())?;
+    let strict_entries: Vec<TaskCatalogueEntry> = entries
+        .iter()
+        .filter(|entry| task_matches_context(&entry.bundle, &context))
+        .filter(|entry| {
+            !recent_texts
+                .iter()
+                .any(|text| tasks_are_too_similar(&entry.bundle, text))
+        })
+        .cloned()
+        .collect();
+    let mut entries = if strict_entries.is_empty() {
+        entries
+            .into_iter()
+            .filter(|entry| task_matches_context(&entry.bundle, &context))
+            .collect()
+    } else {
+        strict_entries
+    };
     entries.sort_by_key(catalogue_sort_key);
     let Some(selected) = entries.into_iter().next() else {
         let app_clone = app.clone();
