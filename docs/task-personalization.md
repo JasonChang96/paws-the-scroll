@@ -4,6 +4,34 @@
 
 Paws The Scroll should generate tasks that feel dynamic, personal, and funny without becoming unsafe or random. OpenAI should provide the cat's flavor, dialogue, portrait, and task wording; the app should own the constraints, safety checks, local history, and adaptation loop.
 
+The product is evidence-informed behavioral support, not treatment. The design should lean on behavioral activation, implementation intentions, autonomy support, and just-in-time intervention research without claiming to diagnose, treat, or monitor mental illness.
+
+## Research-Backed Requirements
+
+1. Every task must be specific, short, and physically safe.
+2. The user must always have a non-shaming exit.
+3. Repeated rerolls should make tasks easier, not more forceful.
+4. Dismissals, rerolls, and inaccessible markings should reduce future pressure when they form a pattern.
+5. The app should reward offline time, not only completion clicks.
+6. Cat dialogue can be dramatic, sassy, or chaotic, but never identity-attacking.
+7. The cat should evolve through affection and adaptation, never punishment.
+8. Claims should stay wellness-oriented and avoid diagnosis or treatment language.
+9. The fallback task library should be curated, local, constraint-aware, and useful without AI.
+
+## Implementation-Intention Frame
+
+The core intervention should behave like an if-then plan:
+
+> If prolonged active device use suggests a stuck loop, then the cat asks for one tiny concrete action.
+
+The task should not be broad advice like "be healthier" or "take care of yourself." It should be an immediate action the user can understand without planning:
+
+- "Stand up and sit back down once."
+- "Move one object to a better place."
+- "Open the avoided document and place the cursor."
+- "Name three visible colors."
+- "Close one nonessential feed tab."
+
 ## Personalization Inputs
 
 The app can tailor tasks from data it already collects locally:
@@ -76,6 +104,7 @@ Add a lightweight derived profile that summarizes task fit over time:
 ```ts
 interface TaskPreferenceStats {
   category: TaskCategory;
+  archetype: string;
   offered_count: number;
   completed_count: number;
   dismissed_count: number;
@@ -95,6 +124,79 @@ Suggested rules:
 - Cool down recently repeated categories so the cat does not feel stale.
 - Lower difficulty after repeated dismissals or late-night interruptions.
 - Keep successful tasks small; do not escalate into productivity pressure.
+
+Track archetypes as well as categories. A user may reject a visible/loud movement task without rejecting all movement tasks. For example, `movement:wall_boop` and `movement:doorway_lap` should be distinguishable from `stretching:shoulder_unlock`.
+
+## Receptivity Tuning
+
+The app should learn when help is welcome, not assume every interruption is useful.
+
+Signals:
+
+- Rerolls suggest the task was poorly matched or too difficult.
+- `This does not work for me` is a strong negative signal for that task shape.
+- `Not right now` is a weaker timing signal.
+- Repeated dismissals in a time window suggest the interruption timing is wrong.
+- Completion followed by time away suggests the interruption was helpful.
+
+Rules:
+
+- Reduce interruption intensity after repeated dismissals in the same time-of-day window.
+- Bias toward lower-difficulty tasks after repeated rerolls or late-night dismissals.
+- Use fallback-safe tasks after five rerolls.
+- Avoid recently rejected archetypes before avoiding the entire category.
+- Keep social/feed contexts eligible for intervention, but frame them as "stuck loops," not "bad apps."
+
+## Task Archetypes And Tags
+
+Local fallback tasks and AI-generated tasks should map to known archetypes and tags. This gives the app a safer way to learn what works.
+
+Suggested archetypes:
+
+| Archetype | Category | Safe default |
+| --- | --- | --- |
+| `wall_boop` | `movement` | Touch the nearest wall and return. |
+| `one_object_reset` | `environment` | Move one object to a better place. |
+| `cursor_landing` | `task_init` | Open the work and place the cursor. |
+| `bad_first_sentence` | `task_init` | Write one intentionally bad sentence. |
+| `three_color_scan` | `grounding` | Name three colors nearby. |
+| `feet_press` | `grounding` | Press feet into the floor for five seconds. |
+| `cup_within_reach` | `hydration` | Put water within reach or take one sip. |
+| `shoulder_unlock` | `stretching` | Roll shoulders three times. |
+| `tab_release` | `environment` | Close one nonessential tab. |
+| `one_message_signal` | `grounding` | Send or draft one safe tiny message. |
+| `cat_sized_square` | `environment` | Clear a small square of surface. |
+| `doorway_lap` | `movement` | Walk to the doorway and back. |
+
+Suggested tags:
+
+- `quiet`
+- `public_safe`
+- `seated`
+- `no_items`
+- `social`
+- `creative`
+- `sensory`
+- `task_start`
+- `screen_exit`
+- `fallback_safe`
+
+Hard boundaries always beat personalization. For example, `no_social_embarrassment` should exclude visible, verbal, or socially risky tasks even if the user's interests suggest playful or social prompts.
+
+## Curated Fallback Library
+
+Offline fallback tasks should be first-class, not just emergency copy. They should be local, validated, and safe under constraints.
+
+Best fallback categories:
+
+- `movement`: stand, seated shoulder roll, touch the nearest wall, take five slow steps.
+- `grounding`: name three colors, press feet into the floor, unclench jaw and hands.
+- `environment`: move one object, throw away one obvious piece of trash, clear one small surface.
+- `hydration`: take a sip of water, refill a cup if already nearby.
+- `stretching`: neck reset, wrist stretch, shoulder roll.
+- `task_init`: write one word, open the document, place the cursor where the next action starts.
+
+Food tasks should remain opt-in because they can be sensitive, inaccessible, or inappropriate for some users.
 
 ## Interests
 
@@ -194,6 +296,18 @@ The product should make the cat feel shaped by the relationship:
 6. The user sees a pet that feels increasingly specific to them.
 
 This should be presented as affection and adaptation, not surveillance. The cat learns what helps; it does not judge what the user failed to do.
+
+## Product Validation Questions
+
+These are open product questions, not settled claims:
+
+- What interruption frequency creates help rather than resentment?
+- When does full-screen blocking feel useful versus too aggressive?
+- Which cat tones motivate specific users, and which tones become annoying?
+- Do users return after dismissals?
+- Do fallback tasks feel useful without AI personalization?
+- Does rewarding time away change behavior over multiple weeks?
+- Does cat individualization increase attachment without making the app feel surveillant?
 
 ## Demo Explanation
 
