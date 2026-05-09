@@ -80,7 +80,7 @@ When I am stuck in paralysis, I do not need another dashboard telling me I faile
 
 So I built Paws The Scroll: a desktop cat that interrupts device paralysis.
 
-On first launch, I tell the app what I am trying to move toward, what I tend to get stuck in, what my body can handle, where I usually am, and what tasks are off-limits.
+On first launch, I tell the app what I am trying to move toward, what tends to stop me, and what kinds of tasks are off-limits.
 
 This is also where the first big AI moment happens: `gpt-image-2` generates the cat portraits. The cat starts as a broad personality, but over time its mood, appearance, and demeanor become more specific to me.
 
@@ -88,17 +88,17 @@ Now imagine I am frozen at my laptop. I have been actively using the computer to
 
 Paws The Scroll watches for active computer use. For the demo, I am using the built-in trigger, `Cmd + Ctrl + Opt + P`, which summons the same full-screen interruption without waiting for the scheduler.
 
-Here, `gpt-5.5` is generating the cat's line and the task. But it is not just writing random wellness advice. It gets a compact context packet: my goals, stuck patterns, mobility, environment, boundaries, the cat's current state, recent rerolls, and what kinds of tasks I actually complete.
+Here, `gpt-5.5` is generating the cat's line and the task. But it is not just writing random wellness advice. It gets a compact context packet about me, the cat, and what has or has not worked before.
 
-Then it returns a structured task bundle: the cat's need, the dialogue, the task category, difficulty, estimated time, and safety flags. The app validates that before showing it.
+Then it returns a structured task bundle with the cat's need, the task, and safety metadata. The app validates that before showing it.
 
 So instead of saying "be productive," the cat can say: "Human. You have become furniture. Stand up for ten seconds so I know you are alive."
 
-The task is tiny on purpose. Stand up. Drink water. Clear one object. Start one step. The cat does not ask me to fix my life. It asks for one act of care small enough to do now.
+The task is tiny on purpose. The cat does not ask me to fix my life. It asks for one act of care small enough to do now.
 
 When I click `I did it`, the cat calms down, its needs update, and the app records what worked. If I spend time away afterward, the cat becomes more independent.
 
-Over time, the cat becomes more owner-like-pet: if I respond well to grounding tasks, it gets calmer; if movement helps, it gets more playful; if I keep working late, it learns to be sleepier and gentler at night. `gpt-image-2` can regenerate portraits when mood, independence, or skills change, so the cat starts to look and act like a relationship, not a mascot.
+Over time, the cat becomes more owner-like-pet. It learns what helps me, changes its mood and demeanor, and `gpt-image-2` can regenerate portraits as it becomes more independent. The cat starts to look and act like a relationship, not a mascot.
 
 Paws The Scroll is evidence-informed behavioral support, not treatment. It is the experience of getting bullied by a cat, gently, until the moment where I disappear into my screen becomes one tiny act of care.
 
