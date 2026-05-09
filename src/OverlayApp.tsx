@@ -13,6 +13,7 @@ import {
 	regenCatPortrait,
 	type TaskOutcome,
 } from "./lib/api";
+import { stripBackground } from "./lib/backgroundRemoval";
 import {
 	enterInterruption,
 	exitInterruption,
@@ -66,7 +67,13 @@ function OverlayApp() {
 		setCat(c);
 		if (c?.portrait_path) {
 			try {
-				setPortraitDataUrl(await readPortraitBytes(c.portrait_path));
+				const raw = await readPortraitBytes(c.portrait_path);
+				// Show the opaque cat instantly so the bottom-right isn't
+				// empty while bg removal runs (1-3s in the webview), then
+				// swap to the transparent version when it's ready.
+				setPortraitDataUrl(raw);
+				const stripped = await stripBackground(raw);
+				setPortraitDataUrl(stripped);
 			} catch {
 				setPortraitDataUrl(null);
 			}
@@ -94,22 +101,6 @@ function OverlayApp() {
 		})();
 		return () => unlisten?.();
 	}, [refreshCat]);
-
-	// Mirror the streaming partials the CatAdoption picker shows: when
-	// gpt-image-2 streams a fresh portrait, swap the companion's image
-	// frame-by-frame so the cat resolves into focus everywhere it's visible.
-	useEffect(() => {
-		let unlisten: (() => void) | undefined;
-		(async () => {
-			unlisten = await listen<{ data_url: string; is_final: boolean }>(
-				"cat-portrait-progress",
-				(event) => {
-					setPortraitDataUrl(event.payload.data_url);
-				},
-			);
-		})();
-		return () => unlisten?.();
-	}, []);
 
 	const generateAndAnnounce = useCallback(
 		async (rerollIndex: number, payload: InterruptionPayload) => {

@@ -5,6 +5,7 @@ import {
 	listTaskEvents,
 	readPortraitBytes,
 } from "../lib/api";
+import { stripBackground } from "../lib/backgroundRemoval";
 import type { ActivityAggregate, Cat, TaskEvent } from "../lib/types";
 import { useViewStore } from "../lib/viewStore";
 
@@ -27,7 +28,9 @@ export function Dashboard() {
 			setEvents(e);
 			if (c?.portrait_path) {
 				try {
-					setPortraitDataUrl(await readPortraitBytes(c.portrait_path));
+					const raw = await readPortraitBytes(c.portrait_path);
+					setPortraitDataUrl(raw);
+					setPortraitDataUrl(await stripBackground(raw));
 				} catch {
 					setPortraitDataUrl(null);
 				}

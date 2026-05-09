@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { match } from "ts-pattern";
 import "./App.css";
 import { getCat, getSettings } from "./lib/api";
+import { preloadBackgroundRemoval } from "./lib/backgroundRemoval";
 import { useViewStore } from "./lib/viewStore";
 import { CatAdoption } from "./views/CatAdoption";
 import { Dashboard } from "./views/Dashboard";
@@ -13,6 +14,11 @@ function App() {
 	const setView = useViewStore((s) => s.setView);
 
 	useEffect(() => {
+		// Kick off the ~30 MB model download in the background while the
+		// user is reading the welcome / picking a cat. Errors are swallowed
+		// inside `preloadBackgroundRemoval`; the strip path falls back to
+		// the opaque source if the model never finishes loading.
+		void preloadBackgroundRemoval();
 		(async () => {
 			try {
 				const settings = await getSettings();
