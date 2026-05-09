@@ -11,6 +11,7 @@ import {
 	generateInterruptionTask,
 	getCat,
 	getUserProfile,
+	persistStrippedPortrait,
 	readPortraitBytes,
 	recordTaskEvent,
 	regenCatPortrait,
@@ -110,7 +111,11 @@ function OverlayApp() {
 			if (currentPortraitRef.current === null) {
 				setPortraitDataUrl(baseImageFor(c.type));
 			}
-			setPortraitDataUrl(await stripBackground(raw));
+			const stripped = await stripBackground(raw);
+			setPortraitDataUrl(stripped);
+			// Persist back to disk so the dashboard (and any future read)
+			// loads the already-transparent PNG without re-stripping.
+			void persistStrippedPortrait(c.portrait_path, stripped);
 		} catch {
 			setPortraitDataUrl(null);
 		}

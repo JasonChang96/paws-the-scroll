@@ -664,6 +664,19 @@ button.primary.danger-button:hover {
 	min-width: 130px;
 }
 
+.dashboard-footer {
+	margin-top: 2.5rem;
+	padding: 1rem 0 1.5rem 0;
+	text-align: center;
+	border-top: 1px solid var(--ring);
+	font-size: 0.85rem;
+}
+
+.dashboard-footer strong {
+	color: var(--ink);
+	font-weight: 600;
+}
+
 /* Settings */
 .settings {
 	max-width: 720px;

@@ -51,6 +51,7 @@ pub fn run() {
             openai::generate_cat_portrait,
             openai::regen_cat_portrait,
             openai::seed_initial_portrait,
+            openai::persist_stripped_portrait,
             openai::read_portrait_bytes,
             activity::request_interruption,
             activity::current_foreground,

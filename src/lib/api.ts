@@ -156,3 +156,11 @@ export const seedInitialPortrait = (
 
 export const readPortraitBytes = (path: string): Promise<string> =>
 	invoke("read_portrait_bytes", { path });
+
+/// After the frontend background-strips a portrait, call this to overwrite
+/// the on-disk file with the transparent PNG bytes. Future reads (including
+/// from other webviews) will load it directly, no second strip pass.
+export const persistStrippedPortrait = (
+	path: string,
+	dataUrl: string,
+): Promise<void> => invoke("persist_stripped_portrait", { path, dataUrl });

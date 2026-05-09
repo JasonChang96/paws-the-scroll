@@ -7,6 +7,7 @@ import {
 	getCat,
 	listAggregates,
 	listTaskEvents,
+	persistStrippedPortrait,
 	readPortraitBytes,
 } from "../lib/api";
 import { stripBackground } from "../lib/backgroundRemoval";
@@ -60,7 +61,9 @@ export function Dashboard() {
 			if (currentPortraitRef.current === null) {
 				setPortraitDataUrl(baseImageFor(c.type));
 			}
-			setPortraitDataUrl(await stripBackground(raw));
+			const stripped = await stripBackground(raw);
+			setPortraitDataUrl(stripped);
+			void persistStrippedPortrait(c.portrait_path, stripped);
 		} catch {
 			setPortraitDataUrl(null);
 		}
@@ -179,6 +182,11 @@ export function Dashboard() {
 					</ul>
 				)}
 			</section>
+
+			<footer className="dashboard-footer muted small">
+				Powered by <strong>GPT-5.5</strong> for the cat's voice and{" "}
+				<strong>GPT Image 2</strong> for the cat's portraits.
+			</footer>
 		</div>
 	);
 }

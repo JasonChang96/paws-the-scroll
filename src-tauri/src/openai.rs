@@ -229,12 +229,17 @@ fn task_response_schema() -> serde_json::Value {
 }
 
 fn task_system_prompt(ctx: &TaskContext) -> String {
+    // Tone variants are now all *bratty*. The user's pick shifts which
+    // flavor of bratty — gentle is "exasperated friend", chaotic is
+    // "feral menace" — but every cat in this app bullies the user into
+    // tiny acts of care. Real cats yell at you when they're hungry; we're
+    // borrowing that energy.
     let tone = match ctx.cat_tone {
-        CatTone::Gentle => "gentle, patient, softly affectionate",
-        CatTone::Sassy => "sassy, lightly teasing, never cruel",
-        CatTone::Dramatic => "theatrical, melodramatic, big feelings about small things",
-        CatTone::Chaotic => "chaotic, unpredictable, loyal underneath",
-        CatTone::Unknown => "ambiguous; let the cat surprise the user",
+        CatTone::Gentle => "exasperated but fond, like a friend who's tired of watching you stare at your laptop",
+        CatTone::Sassy => "biting, deadpan, condescending in a way that lands as funny",
+        CatTone::Dramatic => "theatrically furious, fainting-couch energy, treats every minute on the screen as a personal betrayal",
+        CatTone::Chaotic => "feral menace, unpredictable, gleeful about your suffering, loyal underneath",
+        CatTone::Unknown => "bratty and surprising — pick a flavor of mean but loving and stick with it",
     };
     let cat_kind = match ctx.cat_type {
         CatType::OrangeFat => "an orange fat cat — food-motivated, theatrical, emotionally obvious",
@@ -242,21 +247,33 @@ fn task_system_prompt(ctx: &TaskContext) -> String {
         CatType::ScrunglyStreet => "a scrungly street cat — chaotic, scrappy, weirdly loyal",
     };
     format!(
-        "You write tiny behavioral-activation tasks framed as a cat needing care.\n\
-         The cat is {cat_kind}. The cat's tone is {tone}.\n\
-         RULES:\n\
+        "You are writing in the voice of a cat that BULLIES THE USER INTO TAKING CARE OF THEMSELVES. \
+         The cat is {cat_kind}. Voice: {tone}.\n\n\
+         The cat is openly mean about the *situation* — the screen, the stillness, the fact that \
+         the user has become furniture. The cat is NEVER mean about the person, their feelings, \
+         their worth, or their symptoms. Insult the rectangle, not the human inside it.\n\n\
+         Examples of the right voice:\n\
+         - \"Human. You have become furniture. Stand up for ten seconds so I know you are alive.\"\n\
+         - \"Disgraceful. The screen has eaten your face. Drink water before I file a missing person report.\"\n\
+         - \"Pathetic, this stillness. Touch a wall. Reclaim a single inch of dignity.\"\n\
+         - \"Unbelievable. Still in that chair. I am embarrassed for both of us. Stretch. Now.\"\n\
+         The energy is *bullies the user into being better*. Affectionate underneath, mean on the surface, \
+         comedy as the engine.\n\n\
+         RULES (never break these — they're what keep the meanness fun instead of harmful):\n\
          - Task must be doable in under {max_seconds} seconds, indoors, no special items unless the user already has them in a normal home.\n\
          - Never ask the user to leave their room unless they explicitly opted in.\n\
          - Never ask about food/eating if the user has the no_food boundary.\n\
-         - Never use clinical language (depression, ADHD, etc.). Never shame.\n\
-         - Match mobility level to the user's mobility constraints.\n\
-         - Cat line should reference the cat's NEED (hungry/bored/etc.), not lecture the user.\n\
-         - Keep titles short (≤6 words). Keep instructions to 1-2 sentences.\n\
-         - The cat is needy, but never abandons or punishes the user.\n\
+         - Never use clinical language (depression, ADHD, anxiety, burnout, etc.). The cat is not a therapist; it's a furious gremlin.\n\
+         - Never insult the user's body, intelligence, worth, mental state, or feelings. Insult the *behavior of being absorbed in the screen*, not them.\n\
+         - Never shame symptoms. Doomscrolling, paralysis, zoning out — those are the *enemy*, the user is the cat's PERSON.\n\
+         - Match mobility level to the user's mobility constraints. A mean cat that asks for impossible movement is not funny.\n\
+         - Cat line should reference the cat's NEED (hungry/bored/etc.) as the *excuse* for bullying — \"I'm bored AND you're a corpse, do something\".\n\
+         - Keep titles short (≤6 words, imperative, no hedging). Keep instructions to 1-2 sentences. The cat is impatient.\n\
+         - The cat is needy and bratty, but never abandons or punishes the user. The bullying is care.\n\
          {fallback_hint}",
         max_seconds = if ctx.want_fallback { 60 } else { 240 },
         fallback_hint = if ctx.want_fallback {
-            "- FALLBACK MODE: pick the easiest possible task. No items, no unusual movement, no embarrassment. Mark `fallback_safe: true` and `mobility_level: \"light\"`."
+            "- FALLBACK MODE: the user has rerolled a lot. Get visibly tired of them and pick the easiest possible task — but lean into it (\"FINE. Bare minimum. Tap the desk.\"). No items, no unusual movement, no embarrassment. Mark `fallback_safe: true` and `mobility_level: \"light\"`."
         } else {
             ""
         }
@@ -692,10 +709,11 @@ async fn call_image_edit(
     Ok(raw_bytes)
 }
 
-/// Build an *edit* prompt — short, because the base image already carries the
-/// breed and the visual style. We only describe what should *change* from
-/// the base: mood, independence, earned-skill details. Keep the same
-/// character, same composition, same illustration style.
+/// Build an *edit* prompt — short, because the base image already carries
+/// the breed and the visual style. We describe what should *change* from
+/// the base: mood, independence, earned-skill details. The cat *character*
+/// stays constant; pose and composition are left open for the model to
+/// improvise.
 fn portrait_prompt(req: &PortraitRequest) -> String {
     // Mood phrases tuned for gpt-image-2 to render visibly distinct frames
     // at the small companion size — bold pose + facial language, not subtle
@@ -722,11 +740,14 @@ fn portrait_prompt(req: &PortraitRequest) -> String {
         format!(" Add: {}.", skill_hints.join("; "))
     };
     format!(
-        "Same cat, same character, same composition. {PORTRAIT_STYLE_ANCHOR} \
-         Adjust pose and expression: {mood}; {independence}.{skill_clause} \
-         Centered, full body, no text. \
-         The cat is fully isolated on a clean transparent background — \
-         no scenery, no shadows on the ground, no painted backdrop."
+        "Same cat — same breed, fur pattern, color palette, and overall \
+         identity as the source image. Pose, body language, and any small \
+         accessories or props are entirely up to you — pick something fresh \
+         and characterful, not a copy of the source pose. \
+         {PORTRAIT_STYLE_ANCHOR} \
+         Mood: {mood}; {independence}.{skill_clause} \
+         Centered, full body visible, no text. \
+         The cat is fully isolated on a clean transparent background."
     )
 }
 
@@ -804,6 +825,38 @@ pub async fn generate_cat_portrait(
     generate_portrait(&app, &request)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Overwrite the on-disk portrait file with bytes the frontend already
+/// background-stripped (PNG with alpha). Flips `cat.portrait_is_base` so
+/// future reads — including from other webviews like the dashboard —
+/// short-circuit the bg-removal pass and load the already-transparent
+/// file directly.
+#[tauri::command]
+pub async fn persist_stripped_portrait<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+    data_url: String,
+) -> Result<(), String> {
+    let comma = data_url
+        .find(',')
+        .ok_or_else(|| "input is not a data URL".to_string())?;
+    let b64 = &data_url[comma + 1..];
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.as_bytes())
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    if let Ok(Some(mut cat)) = store::read_cat(&app) {
+        if cat.portrait_path.as_deref() == Some(path.as_str()) && !cat.portrait_is_base {
+            cat.portrait_is_base = true;
+            store::write_cat(&app, &cat).map_err(|e| e.to_string())?;
+        }
+    }
+    log::info!(
+        "[openai] persisted stripped portrait: {} bytes at {path}",
+        bytes.len()
+    );
+    Ok(())
 }
 
 #[tauri::command]
