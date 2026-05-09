@@ -19,15 +19,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use crate::model::{Cat, CatMood, CatNeeds, IndependenceTier, StoryEvent, TaskCategory, TaskEvent};
-
-/// Skill IDs the cat can unlock. String literals so we serialize stably and
-/// the prompt builder + autonomous-decay tick can pattern-match exhaustively.
-pub mod skill {
-    pub const SELF_FEEDING: &str = "occasional_self_feeding";
-    pub const INDEPENDENT_PLAY: &str = "independent_play";
-    pub const SELF_GROOMING: &str = "self_grooming";
-}
+use crate::model::{
+    Cat, CatMood, CatNeeds, IndependenceTier, SkillId, StoryEvent, TaskCategory, TaskEvent,
+};
 
 /// Outcome the user picked for an interruption task. Used by
 /// `apply_task_outcome` to decide which mutations to apply.
@@ -44,7 +38,7 @@ pub enum TaskOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutcomeEffect {
     pub regen_portrait: bool,
-    pub unlocked_skills: Vec<String>,
+    pub unlocked_skills: Vec<SkillId>,
     pub streak_days: u32,
     pub previous_portrait_signature: String,
     pub current_portrait_signature: String,
@@ -224,28 +218,28 @@ pub fn distinct_completion_days(history: &[TaskEvent]) -> u32 {
 /// If the streak crossed a tier the cat doesn't already know, append the
 /// matching skill and emit a story event. Returns the newly unlocked skill
 /// IDs so the UI can celebrate.
-fn unlock_skills_from_streak(cat: &mut Cat, streak_days: u32) -> Vec<String> {
+fn unlock_skills_from_streak(cat: &mut Cat, streak_days: u32) -> Vec<SkillId> {
     let mut unlocked = Vec::new();
-    for (threshold, skill_id, story_text) in [
+    for (threshold, skill, story_text) in [
         (
             7,
-            skill::SELF_FEEDING,
+            SkillId::OccasionalSelfFeeding,
             "learned to find a snack on their own once in a while",
         ),
         (
             14,
-            skill::INDEPENDENT_PLAY,
+            SkillId::IndependentPlay,
             "figured out how to play alone without falling apart",
         ),
         (
             30,
-            skill::SELF_GROOMING,
+            SkillId::SelfGrooming,
             "started keeping themselves immaculate without being asked",
         ),
     ] {
-        if streak_days >= threshold && !cat.skills.iter().any(|s| s == skill_id) {
-            cat.skills.push(skill_id.to_owned());
-            unlocked.push(skill_id.to_owned());
+        if streak_days >= threshold && !cat.skills.contains(&skill) {
+            cat.skills.push(skill);
+            unlocked.push(skill);
             push_story(cat, &format!("{} {story_text}.", cat.name));
         }
     }
@@ -266,50 +260,51 @@ pub fn apply_autonomous_decay(cat: &mut Cat, elapsed_seconds: u32) {
     let elapsed = elapsed_seconds as f32;
 
     for skill in &cat.skills {
-        match skill.as_str() {
-            skill::SELF_FEEDING => {
+        match skill {
+            SkillId::OccasionalSelfFeeding => {
                 NeedField::Hunger.apply_delta(&mut cat.needs, -per_second_rate * elapsed);
             }
-            skill::INDEPENDENT_PLAY => {
+            SkillId::IndependentPlay => {
                 NeedField::Boredom.apply_delta(&mut cat.needs, -per_second_rate * elapsed);
                 NeedField::PlayDrive.apply_delta(&mut cat.needs, -per_second_rate * elapsed);
             }
-            skill::SELF_GROOMING => {
+            SkillId::SelfGrooming => {
                 NeedField::DirtyLitter.apply_delta(&mut cat.needs, -per_second_rate * elapsed);
             }
-            _ => {}
         }
     }
 }
 
 /// Visual hints derived from skills, fed into the portrait prompt so the
 /// generated cat actually *looks* like it has earned them.
-pub fn skill_visual_hints(skills: &[String]) -> Vec<&'static str> {
-    let mut hints = Vec::new();
-    for skill in skills {
-        match skill.as_str() {
-            skill::SELF_FEEDING => {
-                hints.push("with a tiny self-caught morsel nearby, looking proud of itself");
+pub fn skill_visual_hints(skills: &[SkillId]) -> Vec<&'static str> {
+    skills
+        .iter()
+        .map(|skill| match skill {
+            SkillId::OccasionalSelfFeeding => {
+                "with a tiny self-caught morsel nearby, looking proud of itself"
             }
-            skill::INDEPENDENT_PLAY => {
-                hints.push("a small toy at its paws, mid-play");
-            }
-            skill::SELF_GROOMING => hints.push("immaculately groomed, fluffy and fresh"),
-            _ => {}
-        }
-    }
-    hints
+            SkillId::IndependentPlay => "a small toy at its paws, mid-play",
+            SkillId::SelfGrooming => "immaculately groomed, fluffy and fresh",
+        })
+        .collect()
 }
 
 /// Stable hash of the cat's currently-earned skill set. Feeds into the
 /// portrait cache key so a cat that just learned a new skill gets a fresh
 /// portrait instead of reusing the old one.
-pub fn skill_set_hash(skills: &[String]) -> String {
+pub fn skill_set_hash(skills: &[SkillId]) -> String {
     let mut sorted = skills.to_vec();
     sorted.sort();
     let mut hasher = sha2::Sha256::new();
-    for s in &sorted {
-        hasher.update(s.as_bytes());
+    for skill in &sorted {
+        // Use the snake_case wire form so the hash stays stable across
+        // refactors that rename the Rust variant identifiers.
+        let label = serde_json::to_value(skill)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        hasher.update(label.as_bytes());
         hasher.update(b"\0");
     }
     let digest = hasher.finalize();

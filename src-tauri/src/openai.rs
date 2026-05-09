@@ -21,7 +21,7 @@ use crate::cat_state;
 use crate::image_cache;
 use crate::model::{
     CatMood, CatTone, CatType, Environment, GeneratedTaskBundle, IndependenceTier, Mobility,
-    StuckPattern, TaskBoundary,
+    SkillId, StuckPattern, TaskBoundary,
 };
 use crate::store;
 
@@ -50,6 +50,20 @@ pub struct TaskContext {
     pub recent_completed_categories: Vec<String>,
     pub recent_dismissed_categories: Vec<String>,
     pub want_fallback: bool,
+    /// Free-form notes the user wrote in their own words during onboarding.
+    /// Empty strings are skipped when building the prompt.
+    #[serde(default)]
+    pub goals_notes: String,
+    #[serde(default)]
+    pub stuck_patterns_notes: String,
+    #[serde(default)]
+    pub tone_notes: String,
+    #[serde(default)]
+    pub mobility_notes: String,
+    #[serde(default)]
+    pub environment_notes: String,
+    #[serde(default)]
+    pub task_boundaries_notes: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -59,10 +73,10 @@ pub struct PortraitRequest {
     pub mood: CatMood,
     pub independence_tier: IndependenceTier,
     pub accessory_set_hash: String,
-    /// Skill IDs the cat has earned (e.g. `occasional_self_feeding`). The
-    /// prompt builder turns these into visual cues so the cat looks the part.
+    /// Skill IDs the cat has earned. The prompt builder turns these into
+    /// visual cues so the cat looks the part.
     #[serde(default)]
-    pub skills: Vec<String>,
+    pub skills: Vec<SkillId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -531,6 +545,9 @@ async fn call_image_generation_streaming<R: Runtime>(
         "size": "1024x1024",
         "quality": "low",
         "background": "opaque",
+        // JPEG is meaningfully faster to encode and ship than PNG; we lose
+        // alpha but gpt-image-2 is opaque-only anyway.
+        "output_format": "jpeg",
         "stream": true,
         "partial_images": 3,
         "n": 1,
@@ -594,7 +611,7 @@ async fn call_image_generation_streaming<R: Runtime>(
             cat_id: cat_id.to_owned(),
             partial_index: None,
             is_final: true,
-            data_url: format!("data:image/png;base64,{final_b64}"),
+            data_url: format!("data:image/jpeg;base64,{final_b64}"),
         },
     );
 
@@ -668,7 +685,7 @@ fn handle_image_sse_event<R: Runtime>(
                 cat_id: cat_id.to_owned(),
                 partial_index,
                 is_final: false,
-                data_url: format!("data:image/png;base64,{b64}"),
+                data_url: format!("data:image/jpeg;base64,{b64}"),
             },
         );
         *last_b64 = Some(b64.to_owned());

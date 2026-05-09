@@ -132,7 +132,7 @@ export function CatAdoption() {
 				portrait_path: portrait.path,
 			};
 			await saveCat(cat);
-			setRevealed({ choice, dataUrl: `data:image/png;base64,${b64}`, cat });
+			setRevealed({ choice, dataUrl: `data:image/jpeg;base64,${b64}`, cat });
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {

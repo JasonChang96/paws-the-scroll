@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::cat_state::{self, OutcomeEffect, OutcomePayload};
-use crate::model::{Cat, TaskEvent};
+use crate::model::{Cat, SkillId, TaskEvent};
 use crate::store;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ pub fn apply_task_outcome(
 
 /// Helper for the dashboard to expose what the cat has earned.
 #[tauri::command]
-pub fn list_cat_skills(app: AppHandle) -> Result<Vec<String>, String> {
+pub fn list_cat_skills(app: AppHandle) -> Result<Vec<SkillId>, String> {
     Ok(store::read_cat(&app)
         .map_err(|e| e.to_string())?
         .map(|c| c.skills)

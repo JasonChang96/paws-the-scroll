@@ -38,7 +38,7 @@ pub fn make_key(parts: &[&str]) -> String {
 }
 
 pub fn path_for_key<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<PathBuf> {
-    Ok(cache_dir(app)?.join(format!("cat-{key}.png")))
+    Ok(cache_dir(app)?.join(format!("cat-{key}.jpg")))
 }
 
 pub fn read_cached(path: &Path) -> Option<Vec<u8>> {

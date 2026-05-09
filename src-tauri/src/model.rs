@@ -146,6 +146,23 @@ pub struct UserProfile {
     pub task_boundaries: Vec<TaskBoundary>,
     pub interruption_intensity: u8,
     pub ai_enabled: bool,
+    /// Free-form per-step notes the user wrote alongside the chip/card
+    /// picks. Each defaults to empty string when missing on disk so older
+    /// profiles still deserialize cleanly. The AI task-prompt builder
+    /// folds these into the user's context so the cat picks tasks
+    /// shaped by what the user said in their own words.
+    #[serde(default)]
+    pub goals_notes: String,
+    #[serde(default)]
+    pub stuck_patterns_notes: String,
+    #[serde(default)]
+    pub tone_notes: String,
+    #[serde(default)]
+    pub mobility_notes: String,
+    #[serde(default)]
+    pub environment_notes: String,
+    #[serde(default)]
+    pub task_boundaries_notes: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -173,6 +190,18 @@ pub struct StoryEvent {
     pub text: String,
 }
 
+/// Skills the cat can earn from streak milestones. Each variant maps 1:1 to
+/// a passive-decay rule in `cat_state::apply_autonomous_decay` and a visual
+/// cue in `cat_state::skill_visual_hints`. Adding a variant is a compile
+/// error at every consumer — exactly what we want.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillId {
+    OccasionalSelfFeeding,
+    IndependentPlay,
+    SelfGrooming,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(clippy::struct_field_names)]
 pub struct Cat {
@@ -185,7 +214,7 @@ pub struct Cat {
     pub needs: CatNeeds,
     pub mood: CatMood,
     pub independence_level: f32,
-    pub skills: Vec<String>,
+    pub skills: Vec<SkillId>,
     pub items: Vec<CatItem>,
     pub story_events: Vec<StoryEvent>,
     pub portrait_path: Option<String>,

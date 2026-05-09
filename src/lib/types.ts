@@ -57,6 +57,14 @@ export type CatMood =
 /// `Tier0` serializes as `tier0`, not `tier_0`.
 export type IndependenceTier = "tier0" | "tier1" | "tier2" | "tier3";
 
+/// Cat skills earned through streak milestones. Mirrors `SkillId` in
+/// src-tauri/src/model.rs. Each skill has a passive-decay rule and a visual
+/// cue in the portrait — adding one means updating both sides.
+export type SkillId =
+	| "occasional_self_feeding"
+	| "independent_play"
+	| "self_grooming";
+
 export type TaskSource = "ai" | "fallback" | "demo_trigger";
 
 export type AppCategory = "social" | "browser" | "other";
@@ -78,6 +86,16 @@ export interface UserProfile {
 	task_boundaries: TaskBoundary[];
 	interruption_intensity: number;
 	ai_enabled: boolean;
+	/// Free-form per-step notes paired with the chip/card picks. Always
+	/// present (empty string when the user wrote nothing); old profiles
+	/// missing the field deserialize as "" via serde default on the Rust
+	/// side.
+	goals_notes: string;
+	stuck_patterns_notes: string;
+	tone_notes: string;
+	mobility_notes: string;
+	environment_notes: string;
+	task_boundaries_notes: string;
 }
 
 export interface CatNeeds {
@@ -111,7 +129,7 @@ export interface Cat {
 	needs: CatNeeds;
 	mood: CatMood;
 	independence_level: number;
-	skills: string[];
+	skills: SkillId[];
 	items: CatItem[];
 	story_events: StoryEvent[];
 	portrait_path: string | null;

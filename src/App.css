@@ -377,6 +377,37 @@ input:focus {
 	min-width: 120px;
 }
 
+.confirm-button-row {
+	display: flex;
+	justify-content: center;
+	gap: 0.75rem;
+	margin-top: 0.5rem;
+}
+
+.danger-zone {
+	border: 1px solid #d2796a;
+	background: #fdebe6;
+}
+
+.danger-zone h2 {
+	color: #b03a2e;
+}
+
+button.ghost.danger-button {
+	color: #b03a2e;
+	border-color: #d2796a;
+}
+
+button.primary.danger-button {
+	background: #b03a2e;
+	color: var(--surface);
+	border-color: #b03a2e;
+}
+
+button.primary.danger-button:hover {
+	background: #95291f;
+}
+
 .cat-card-emoji {
 	font-size: 96px;
 	line-height: 1;

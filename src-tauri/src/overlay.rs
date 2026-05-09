@@ -27,8 +27,15 @@ tauri_nspanel::tauri_panel! {
 
 pub const PRIMARY_OVERLAY_LABEL: &str = "overlay";
 pub const SECONDARY_OVERLAY_PREFIX: &str = "overlay-monitor-";
-pub const COMPANION_WIDTH: f64 = 240.0;
-pub const COMPANION_HEIGHT: f64 = 220.0;
+/// Roughly the size of a default macOS dock icon (~60px) — small enough to
+/// read as a desktop pet but big enough to be findable.
+pub const COMPANION_WIDTH: f64 = 64.0;
+pub const COMPANION_HEIGHT: f64 = 64.0;
+/// Edge insets from the bottom-right corner. `NSPanel` sits above the dock
+/// visually (`ScreenSaver` level), so we pin tight to the corner instead of
+/// trying to clear the dock height.
+const COMPANION_RIGHT_INSET_PX: f64 = 20.0;
+const COMPANION_BOTTOM_INSET_PX: f64 = 20.0;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,7 +54,7 @@ pub fn setup_primary_overlay(app: &AppHandle) -> tauri::Result<()> {
         COMPANION_WIDTH,
         COMPANION_HEIGHT,
     )?;
-    position_overlay_top_right(app, PRIMARY_OVERLAY_LABEL)?;
+    position_overlay_bottom_right(app, PRIMARY_OVERLAY_LABEL)?;
     Ok(())
 }
 
@@ -116,7 +123,7 @@ pub fn create_overlay_window(
 }
 
 #[cfg(target_os = "macos")]
-fn position_overlay_top_right(app: &AppHandle, label: &str) -> tauri::Result<()> {
+fn position_overlay_bottom_right(app: &AppHandle, label: &str) -> tauri::Result<()> {
     let Some(window) = app.get_webview_window(label) else {
         return Ok(());
     };
@@ -127,9 +134,16 @@ fn position_overlay_top_right(app: &AppHandle, label: &str) -> tauri::Result<()>
     let monitor_size = monitor.size();
     let monitor_pos = monitor.position();
     let logical_w = (f64::from(monitor_size.width) / scale).round();
-    let inset = 24.0;
-    let x = (f64::from(monitor_pos.x) / scale + logical_w - COMPANION_WIDTH - inset).round();
-    let y = (f64::from(monitor_pos.y) / scale + inset).round();
+    let logical_h = (f64::from(monitor_size.height) / scale).round();
+    // Bottom-right corner, snug against both edges. The NSPanel floats above
+    // the dock so we don't need to leave dock-height clearance.
+    let x =
+        (f64::from(monitor_pos.x) / scale + logical_w - COMPANION_WIDTH - COMPANION_RIGHT_INSET_PX)
+            .round();
+    let y = (f64::from(monitor_pos.y) / scale + logical_h
+        - COMPANION_HEIGHT
+        - COMPANION_BOTTOM_INSET_PX)
+        .round();
     window.set_position(tauri::LogicalPosition::new(x, y))?;
     Ok(())
 }
@@ -188,7 +202,7 @@ fn shrink_to_companion(app: &AppHandle) -> tauri::Result<()> {
         return Ok(());
     };
     window.set_size(tauri::LogicalSize::new(COMPANION_WIDTH, COMPANION_HEIGHT))?;
-    position_overlay_top_right(app, PRIMARY_OVERLAY_LABEL)?;
+    position_overlay_bottom_right(app, PRIMARY_OVERLAY_LABEL)?;
     Ok(())
 }
 

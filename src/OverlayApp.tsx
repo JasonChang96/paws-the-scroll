@@ -20,7 +20,12 @@ import {
 	type InterruptionPayload,
 	onInterruptionRequested,
 } from "./lib/overlayApi";
-import type { Cat, GeneratedTaskBundle, UserProfile } from "./lib/types";
+import type {
+	Cat,
+	GeneratedTaskBundle,
+	SkillId,
+	UserProfile,
+} from "./lib/types";
 import { newId, nowIso } from "./lib/util";
 
 type Mode =
@@ -69,7 +74,7 @@ function OverlayApp() {
 		if (c?.portrait_path) {
 			try {
 				const b64 = await readPortraitBytes(c.portrait_path);
-				setPortraitDataUrl(`data:image/png;base64,${b64}`);
+				setPortraitDataUrl(`data:image/jpeg;base64,${b64}`);
 			} catch {
 				setPortraitDataUrl(null);
 			}
@@ -363,17 +368,12 @@ function OverlayApp() {
 		.exhaustive();
 }
 
-function skillLabel(skillId: string): string {
-	switch (skillId) {
-		case "occasional_self_feeding":
-			return "Occasional self-feeding";
-		case "independent_play":
-			return "Independent play";
-		case "self_grooming":
-			return "Self-grooming";
-		default:
-			return skillId.replace(/_/g, " ");
-	}
+function skillLabel(skillId: SkillId): string {
+	return match(skillId)
+		.with("occasional_self_feeding", () => "Occasional self-feeding")
+		.with("independent_play", () => "Independent play")
+		.with("self_grooming", () => "Self-grooming")
+		.exhaustive();
 }
 
 function CompanionView({
@@ -384,15 +384,25 @@ function CompanionView({
 	cat: Cat | null;
 }) {
 	return (
-		<div className="companion">
-			<div className="companion-frame">
+		<div
+			className="companion"
+			title={cat?.name ?? "cat"}
+			// Tauri's drag-region attribute: any mousedown on this element
+			// drags the panel. Only on the small companion view; we don't
+			// want the fullscreen interruption screen to be draggable.
+			data-tauri-drag-region
+		>
+			<div className="companion-frame" data-tauri-drag-region>
 				{portraitDataUrl ? (
-					<img src={portraitDataUrl} alt={cat?.name ?? "cat"} />
+					<img
+						src={portraitDataUrl}
+						alt={cat?.name ?? "cat"}
+						data-tauri-drag-region
+					/>
 				) : (
-					<div className="companion-placeholder" />
+					<div className="companion-placeholder" data-tauri-drag-region />
 				)}
 			</div>
-			{cat ? <div className="companion-name">{cat.name}</div> : null}
 		</div>
 	);
 }

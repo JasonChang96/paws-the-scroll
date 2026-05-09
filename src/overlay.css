@@ -55,56 +55,36 @@ button:disabled {
 	opacity: 0.7;
 }
 
-/* Companion mode */
+/* Companion mode — tiny desktop pet sitting in the bottom-right corner,
+ * smaller than a dock icon. */
 .companion {
 	width: 100%;
 	height: 100%;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: flex-start;
-	gap: 0.5rem;
-	padding: 0.5rem;
 }
 
 .companion-frame {
 	width: 100%;
-	height: 170px;
-	background: linear-gradient(
-		180deg,
-		rgba(255, 250, 242, 0.92) 0%,
-		rgba(255, 245, 231, 0.92) 100%
-	);
-	border-radius: 22px;
+	height: 100%;
+	background: rgba(255, 250, 242, 0.92);
+	border-radius: 50%;
 	overflow: hidden;
 	box-shadow:
-		0 8px 24px rgba(53, 30, 12, 0.18),
-		0 0 0 1px rgba(255, 255, 255, 0.45) inset;
+		0 4px 14px rgba(53, 30, 12, 0.32),
+		0 0 0 1px rgba(255, 255, 255, 0.55) inset;
 	display: grid;
 	place-items: center;
 	animation: companion-bob 5s ease-in-out infinite;
 }
 
-.companion-frame img {
+.companion-frame img,
+.companion-placeholder {
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
 }
 
 .companion-placeholder {
-	width: 100%;
-	height: 100%;
 	background: #f1c8a8;
-}
-
-.companion-name {
-	color: #fffaf2;
-	font-weight: 600;
-	font-size: 0.95rem;
-	background: rgba(42, 31, 26, 0.62);
-	padding: 0.2rem 0.7rem;
-	border-radius: 999px;
-	backdrop-filter: blur(6px);
 }
 
 @keyframes companion-bob {

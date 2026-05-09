@@ -28,7 +28,7 @@ export function Dashboard() {
 			if (c?.portrait_path) {
 				try {
 					const b64 = await readPortraitBytes(c.portrait_path);
-					setPortraitDataUrl(`data:image/png;base64,${b64}`);
+					setPortraitDataUrl(`data:image/jpeg;base64,${b64}`);
 				} catch {
 					setPortraitDataUrl(null);
 				}

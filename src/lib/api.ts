@@ -10,6 +10,7 @@ import type {
 	GeneratedTaskBundle,
 	IndependenceTier,
 	Settings,
+	SkillId,
 	TaskCategory,
 	TaskEvent,
 	TimeOfDay,
@@ -39,6 +40,11 @@ export const listTaskEvents = (): Promise<TaskEvent[]> =>
 
 export const listAggregates = (): Promise<ActivityAggregate[]> =>
 	invoke("list_aggregates");
+
+/// Wipes the persisted store, the on-disk sprite cache, and emits
+/// `cat-updated` so listeners refresh. The frontend should send the user
+/// back to onboarding after this resolves.
+export const factoryReset = (): Promise<void> => invoke("factory_reset");
 
 export interface InterruptionTaskContext {
 	goals: string[];
@@ -71,7 +77,7 @@ export interface PortraitRequest {
 	mood: CatMood;
 	independence_tier: IndependenceTier;
 	accessory_set_hash: string;
-	skills: string[];
+	skills: SkillId[];
 }
 
 export type TaskOutcome = "completed" | "dismissed" | "inaccessible";
@@ -84,7 +90,7 @@ export interface OutcomePayload {
 
 export interface OutcomeEffect {
 	regen_portrait: boolean;
-	unlocked_skills: string[];
+	unlocked_skills: SkillId[];
 	streak_days: number;
 	previous_portrait_signature: string;
 	current_portrait_signature: string;
@@ -101,7 +107,8 @@ export const applyTaskOutcome = (
 ): Promise<ApplyTaskOutcomeResponse> =>
 	invoke("apply_task_outcome", { payload, lastEvent });
 
-export const listCatSkills = (): Promise<string[]> => invoke("list_cat_skills");
+export const listCatSkills = (): Promise<SkillId[]> =>
+	invoke("list_cat_skills");
 
 export interface PortraitResponse {
 	path: string;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ErrorModal } from "../components/ErrorModal";
-import { getSettings, saveSettings } from "../lib/api";
+import { factoryReset, getSettings, saveSettings } from "../lib/api";
 import type { Settings as SettingsModel } from "../lib/types";
 import { useViewStore } from "../lib/viewStore";
 import { CrisisNote } from "./Onboarding";
@@ -10,6 +10,8 @@ export function Settings() {
 	const [settings, setSettings] = useState<SettingsModel | null>(null);
 	const [savedAt, setSavedAt] = useState<number | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [confirmingReset, setConfirmingReset] = useState(false);
+	const [resetting, setResetting] = useState(false);
 
 	useEffect(() => {
 		getSettings()
@@ -113,6 +115,81 @@ export function Settings() {
 			</section>
 
 			<CrisisNote />
+
+			<section className="danger-zone">
+				<h2>Reset</h2>
+				<p className="muted">
+					Wipes your profile, your cat, all task history, and the cached cat
+					portraits. The cat won't remember you. Useful while we're still
+					iterating on the app.
+				</p>
+				<button
+					type="button"
+					className="ghost danger-button"
+					onClick={() => setConfirmingReset(true)}
+					disabled={resetting}
+				>
+					{resetting ? "Resetting…" : "Factory reset"}
+				</button>
+			</section>
+
+			{confirmingReset ? (
+				<button
+					type="button"
+					className="error-modal-backdrop"
+					onClick={() => setConfirmingReset(false)}
+					aria-label="Cancel reset"
+				>
+					<div
+						className="error-modal-card"
+						role="alertdialog"
+						aria-modal="true"
+						aria-labelledby="reset-confirm-title"
+						onClick={(event) => event.stopPropagation()}
+						onKeyDown={(event) => event.stopPropagation()}
+					>
+						<div className="error-modal-icon" aria-hidden="true">
+							🐾
+						</div>
+						<h2 id="reset-confirm-title" className="error-modal-title">
+							Erase everything?
+						</h2>
+						<p className="error-modal-message">
+							Your cat will be gone. The portraits, the streak, the story — all
+							of it. You'll start over from onboarding.
+						</p>
+						<div className="confirm-button-row">
+							<button
+								type="button"
+								className="ghost"
+								onClick={() => setConfirmingReset(false)}
+								disabled={resetting}
+							>
+								Keep my cat
+							</button>
+							<button
+								type="button"
+								className="primary danger-button"
+								onClick={async () => {
+									setResetting(true);
+									try {
+										await factoryReset();
+										setView("onboarding");
+									} catch (e) {
+										setError(e instanceof Error ? e.message : String(e));
+										setConfirmingReset(false);
+									} finally {
+										setResetting(false);
+									}
+								}}
+								disabled={resetting}
+							>
+								{resetting ? "Erasing…" : "Erase"}
+							</button>
+						</div>
+					</div>
+				</button>
+			) : null}
 
 			{savedAt ? <p className="muted small">Saved.</p> : null}
 			<ErrorModal

@@ -166,3 +166,33 @@ pub fn list_task_events(app: AppHandle) -> Result<Vec<TaskEvent>, String> {
 pub fn list_aggregates(app: AppHandle) -> Result<Vec<ActivityAggregate>, String> {
     read_aggregates(&app).map_err(|e| e.to_string())
 }
+
+/// Wipe the persisted store and the on-disk sprite cache so the user lands
+/// back at onboarding with no cat. Emits `cat-updated` with a null payload
+/// so listeners re-fetch and discover the cat is gone.
+#[tauri::command]
+pub fn factory_reset(app: AppHandle) -> Result<(), String> {
+    let store = load_store(&app).map_err(|e| e.to_string())?;
+    for key in [
+        KEY_USER_PROFILE,
+        KEY_CAT,
+        KEY_SETTINGS,
+        KEY_TASK_EVENTS,
+        KEY_AGGREGATES,
+    ] {
+        store.delete(key);
+    }
+    store.save().map_err(|e| e.to_string())?;
+
+    if let Ok(dir) = crate::image_cache::cache_dir(&app) {
+        // Best effort — if the cache dir is missing or partially deleted,
+        // we still want the store wipe to count as a successful reset.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    if let Err(error) = app.emit(CAT_UPDATED_EVENT, serde_json::Value::Null) {
+        log::warn!("[store] failed to emit cat-updated after reset: {error}");
+    }
+    log::info!("[store] factory reset complete");
+    Ok(())
+}

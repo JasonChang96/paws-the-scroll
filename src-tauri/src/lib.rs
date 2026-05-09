@@ -7,6 +7,7 @@ mod openai;
 mod overlay;
 mod store;
 mod task_outcome;
+mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -37,6 +38,7 @@ pub fn run() {
             store::record_task_event,
             store::list_task_events,
             store::list_aggregates,
+            store::factory_reset,
             openai::generate_interruption_task,
             openai::generate_cat_portrait,
             openai::regen_cat_portrait,
@@ -52,6 +54,7 @@ pub fn run() {
             overlay::setup_primary_overlay(app.handle())?;
             activity::start_watcher(app.handle().clone());
             demo_trigger::register(app.handle())?;
+            tray::install(app.handle())?;
             Ok(())
         })
         .run(tauri::generate_context!())
